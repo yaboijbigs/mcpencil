@@ -88,9 +88,12 @@ export function LandingExperience({
     <main className="landing-page landing-experience">
       <section className="landing-hero" aria-labelledby="landing-title">
         <div className="landing-hero-copy">
-          <span className="eyebrow"><SparkIcon /> A drawing game for people + agents</span>
-          <h1 id="landing-title">Draw. Guess. Swap roles with your agent.</h1>
-          <p>Set a shared sketchbook on the open web, then let humans and browser agents play by the same rules.</p>
+          <span className="eyebrow hero-kicker"><SparkIcon /> A drawing game for people + agents</span>
+          <h1 id="landing-title">
+            Draw. Guess.<br />
+            <em>Swap roles</em> with your agent.
+          </h1>
+          <p>Open a shared sketchbook on the web, then let humans and browser agents play by the same rules.</p>
           <div className="landing-hero-actions">
             <a
               className="primary-button jumbo"
@@ -117,7 +120,7 @@ export function LandingExperience({
           <p>Each mode changes who plays, how turns rotate, and what a win means.</p>
         </header>
         <div className="mode-card-grid" role="group" aria-labelledby="mode-section-title">
-          {GAME_MODES.map((definition) => {
+          {GAME_MODES.map((definition, index) => {
             const selected = definition.id === selectedMode;
             return (
               <article
@@ -125,9 +128,11 @@ export function LandingExperience({
                 key={definition.id}
                 aria-labelledby={`mode-${definition.id}-title`}
               >
+                <span className="tape" aria-hidden="true" />
                 <span className="mode-card-topline">
-                  <span className="mode-number">0{GAME_MODES.indexOf(definition) + 1}</span>
+                  <span className="mode-number">0{index + 1}</span>
                   {definition.recommended ? <span className="recommended-badge">{definition.recommendation}</span> : null}
+                  {selected ? <span className="picked-stamp" aria-hidden="true">Picked</span> : null}
                 </span>
                 <ModeDoodle mode={definition.id} />
                 <span className="mode-card-copy">
@@ -168,8 +173,9 @@ export function LandingExperience({
             <span>{mode.roleLoop[0]}</span><ArrowIcon /><span>{mode.roleLoop[1]}</span>
           </div>
         </div>
-        <form className="entry-form create-game-form" onSubmit={(event) => void submitCreate(event)}>
-          <label>
+        <form className="create-game-form" onSubmit={(event) => void submitCreate(event)}>
+          <span className="tape tape-right" aria-hidden="true" />
+          <label className="field">
             <span>Your display name</span>
             <input
               maxLength={24}
@@ -204,7 +210,7 @@ export function LandingExperience({
           <p>{hasValidRoomInvite ? `Room ${roomFromUrl} is waiting for you.` : "Use the five-character code from any Practice, Arena, or Exhibition host."}</p>
         </div>
         <form className="join-form" onSubmit={(event) => void submitJoin(event)}>
-          <label>
+          <label className="field">
             <span>Your display name</span>
             <input
               autoFocus={hasValidRoomInvite}
@@ -216,7 +222,7 @@ export function LandingExperience({
               autoComplete="nickname"
             />
           </label>
-          <label>
+          <label className="field">
             <span>Room code</span>
             <input
               className="code-input"
@@ -250,13 +256,13 @@ export function LandingExperience({
         <div className="role-direction-grid">
           <article>
             <span className="direction-number">01</span>
-            <BotIcon />
+            <span className="direction-glyph agent"><BotIcon /></span>
             <h3>Agent draws. Human guesses.</h3>
             <p>The agent reads its private prompt and builds the shared canvas from low-level geometry.</p>
           </article>
           <article>
             <span className="direction-number">02</span>
-            <PeopleIcon />
+            <span className="direction-glyph human"><PeopleIcon /></span>
             <h3>Human draws. Agent guesses.</h3>
             <p>The agent interprets the live, role-safe canvas state and submits candidates through WebMCP.</p>
           </article>
@@ -313,6 +319,7 @@ function AgentHandoff({ roomCode, personUrl, lens }: {
       </section>
       <section className="agent-handoff-grid">
         <article className="agent-handoff-card" aria-labelledby="agent-handoff-heading">
+          <span className="tape" aria-hidden="true" />
           <span className="agent-handoff-glyph" aria-hidden="true"><BotIcon /></span>
           <span className="eyebrow">Required first game action</span>
           <h1 id="agent-handoff-heading">Call the page tool now.</h1>
@@ -370,8 +377,11 @@ function HeroDoodle() {
     <div className="landing-hero-doodle" aria-hidden="true">
       <svg viewBox="0 0 520 360">
         <path className="doodle-paper" d="M62 42 452 28l18 278L78 330 62 42Z" />
-        <path className="doodle-line cobalt" d="M142 255c17-83 37-136 73-175 33 43 56 99 72 172M166 184h96M126 257h180" />
-        <path className="doodle-line coral" d="M342 205c-12-49 1-84 39-104 42 19 56 54 41 104m-80 0h82m-61-57h.1m37 0h.1m-49 24c18 14 36 14 54 0" />
+        <path className="doodle-line cobalt slow" d="M142 255c17-83 37-136 73-175 33 43 56 99 72 172M166 184h96M126 257h180" />
+        <path className="doodle-line coral medium" d="M342 205c-12-49 1-84 39-104 42 19 56 54 41 104m-80 0h82" />
+        <circle className="doodle-line coral quick" cx="362" cy="148" r="6" />
+        <circle className="doodle-line coral quick" cx="399" cy="148" r="6" />
+        <path className="doodle-line coral quick" d="M354 172c18 14 36 14 54 0" />
         <path className="doodle-arrow" d="m318 74 24-20 26 14m-26-14 5 31" />
       </svg>
       <span className="doodle-note note-human"><PeopleIcon /> “A tower?”</span>

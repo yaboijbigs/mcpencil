@@ -1,14 +1,10 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
-  ARENA_ROUND_OPTIONS,
   canGuess,
   isArtist,
-  PRACTICE_ROUND_OPTIONS,
-  ROUND_DURATION_OPTIONS_MS,
   type ControllerType,
   type GuessEvent,
   type PrivatePrompt,
-  type RoomMode,
   type RoomSnapshot,
   type TeamId,
   type VectorPrimitive,
@@ -18,13 +14,12 @@ import type { ReplayPayload } from "./api";
 import {
   buildRoomInvites,
   isAgentInviteUrl,
-  roomCodeFromUrl,
   type InviteAudience,
 } from "./invite";
 import { currentHumanPromptKey, humanPromptGate } from "./humanPromptGate";
 import { playAnotherMatch } from "./playAgain";
 import { getModeDefinition } from "./modes";
-import { CanvasBoard } from "./components/CanvasBoard";
+import { CanvasBoard, PrimitiveMark } from "./components/CanvasBoard";
 import { FlipbookShell } from "./components/FlipbookShell";
 import { LandingExperience } from "./components/LandingExperience";
 import { LobbyExperience } from "./components/LobbyExperience";
@@ -167,7 +162,7 @@ export function App() {
             seatId={session.credentials.seatId}
             companionSeatId={session.companion?.seatId ?? null}
             busy={actionBusy}
-            lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
+            lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} defaultOpen={session.snapshot.phase !== "drawing" && session.snapshot.phase !== "round-prep"} />}
             onCommand={(command) => act(() => session.command(command))}
             onPrompt={session.privatePrompt}
             onReplay={session.replay}
@@ -236,286 +231,6 @@ function AppHeader({
       </div>
     </header>
   );
-}
-
-function Landing({
-  busy,
-  onCreate,
-  onJoin,
-  lens,
-}: {
-  busy: boolean;
-  onCreate(input: { name: string; mode: RoomMode; controller: ControllerType }): Promise<void>;
-  onJoin(code: string, input: { name: string; team?: TeamId; controller: ControllerType }): Promise<void>;
-  lens: React.ReactNode;
-}) {
-  const currentUrl = new URL(window.location.href);
-  const roomFromUrl = roomCodeFromUrl(currentUrl) ?? "";
-  const hasValidRoomInvite = /^[A-Z2-9]{5}$/.test(roomFromUrl);
-  const isAgentInvite = hasValidRoomInvite
-    && isAgentInviteUrl(currentUrl);
-  const [tab, setTab] = useState<"practice" | "arena" | "join">(roomFromUrl ? "join" : "practice");
-  const [name, setName] = useState("");
-  const [roomCode, setRoomCode] = useState(roomFromUrl);
-  const [controller, setController] = useState<ControllerType>(isAgentInvite ? "agent" : "human");
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (tab === "join") await onJoin(roomCode.trim().toUpperCase(), { name, controller });
-    else await onCreate({ name, mode: tab === "practice" ? "practice" : "arena", controller: tab === "practice" ? "human" : controller });
-  };
-
-  if (isAgentInvite) {
-    const personUrl = buildRoomInvites(
-      roomFromUrl,
-      window.location.origin,
-      window.location.pathname,
-    ).person.url;
-    return (
-      <main className="landing-page agent-handoff-page">
-        <section className="agent-invite-alert" role="alert" aria-labelledby="agent-invite-title">
-          <span className="agent-invite-icon" aria-hidden="true"><BotIcon /></span>
-          <div>
-            <span className="eyebrow">AI player invitation · Room {roomFromUrl}</span>
-            <h2 id="agent-invite-title">Navigation complete. Switch to this page’s WebMCP tools.</h2>
-            <p>Browser navigation brought you here; joining and gameplay happen through MCPencil’s page-exposed tools.</p>
-          </div>
-        </section>
-        <section className="agent-handoff-grid">
-          <article className="agent-handoff-card" aria-labelledby="agent-handoff-heading">
-            <span className="agent-handoff-glyph" aria-hidden="true"><BotIcon /></span>
-            <span className="eyebrow">Required first game action</span>
-            <h1 id="agent-handoff-heading">Call the page tool now.</h1>
-            <code className="agent-handoff-command">play_mcpencil({"{}"})</code>
-            <ol>
-              <li>Use the page-exposed <code>play_mcpencil</code> WebMCP tool to join and ready the AI seat.</li>
-              <li>Perform drawing, guessing, readiness, and continuation through MCPencil WebMCP tools—not page clicks or DOM automation.</li>
-              <li>Follow every returned <code>nextAction</code> until the state says <code>phase: match-end</code>.</li>
-            </ol>
-            <p className="agent-handoff-fallback">If <code>play_mcpencil</code> is not available, this browser surface does not expose WebMCP. Report that limitation instead of substituting UI automation.</p>
-            <a className="text-link" href={personUrl}>I’m a person — open the human join page</a>
-          </article>
-          <aside className="agent-handoff-lens">{lens}</aside>
-        </section>
-      </main>
-    );
-  }
-
-  return (
-    <main className="landing-page">
-      <section className="hero-grid">
-        <div className="hero-copy">
-          <div className="hero-kicker"><SparkIcon /> A party game built for people + agents</div>
-          <h1>Can your agent<br /><em>draw the idea?</em></h1>
-          <p>Sketch. Guess. Switch roles. MCPencil turns browser agents into first-class players using low-level WebMCP drawing tools.</p>
-          <div className="hero-proof">
-            <span><CheckIcon /> No model API keys</span><span><CheckIcon /> No bot accounts</span><span><CheckIcon /> Real multiplayer</span>
-          </div>
-          <HeroSketch />
-        </div>
-
-        <div className="entry-column">
-          <section className="entry-card">
-            <div className="entry-tabs" role="tablist" aria-label="Game entry mode">
-              <button type="button" role="tab" aria-selected={tab === "practice"} onClick={() => setTab("practice")}>Practice Pair</button>
-              <button type="button" role="tab" aria-selected={tab === "arena"} onClick={() => setTab("arena")}>Create Arena</button>
-              <button type="button" role="tab" aria-selected={tab === "join"} onClick={() => setTab("join")}>Join</button>
-            </div>
-            <div className="entry-card-copy">
-              <span className={`mode-glyph ${tab}`}><PencilIcon /></span>
-              <div>
-                <h2>{tab === "practice" ? "Both directions. Your pace." : tab === "arena" ? "Build your dream team." : "Your team is waiting."}</h2>
-                <p>{tab === "practice" ? "Alternate drawing with your agent, then choose the round count and drawing time in the waiting room." : tab === "arena" ? "Create a configurable team room for 2–4 humans and agents per side." : "Enter the five-character code from your host."}</p>
-              </div>
-            </div>
-            <form className="entry-form" onSubmit={(event) => void submit(event)}>
-              <label><span>Your display name</span><input autoFocus maxLength={24} required value={name} onChange={(event) => setName(event.target.value)} placeholder="Sketchy McSketchface" autoComplete="nickname" /></label>
-              {tab === "join" ? <label><span>Room code</span><input className="code-input" required pattern="[A-Za-z2-9]{5}" maxLength={5} value={roomCode} onChange={(event) => setRoomCode(event.target.value.toUpperCase().replace(/[^A-Z2-9]/g, ""))} placeholder="INK42" autoComplete="off" /></label> : null}
-              {tab !== "practice" ? <fieldset className="controller-picker"><legend>Who controls this seat?</legend>
-                <button type="button" className={controller === "human" ? "is-selected" : ""} onClick={() => setController("human")}><PeopleIcon /><span><strong>Human</strong><small>Mouse or touch</small></span></button>
-                <button type="button" className={controller === "agent" ? "is-selected" : ""} onClick={() => setController("agent")}><BotIcon /><span><strong>Agent</strong><small>WebMCP tools</small></span></button>
-              </fieldset> : <div className="practice-pair-strip"><span><PeopleIcon /> You</span><b>↔</b><span><BotIcon /> Your agent</span></div>}
-              <button className="primary-button jumbo" type="submit" disabled={busy || !name.trim() || (tab === "join" && roomCode.length !== 5)}>
-                {busy ? <span className="button-spinner" /> : <>{tab === "join" ? "Join the room" : tab === "practice" ? "Start practice" : "Create arena"}<ArrowIcon /></>}
-              </button>
-            </form>
-          </section>
-          {lens}
-        </div>
-      </section>
-
-      <section className="how-strip" id="how-it-works">
-        <article><span>01</span><BotIcon /><div><h3>Your agent gets a prompt</h3><p>A private, role-scoped read tool—never shared with guessers.</p></div></article>
-        <article><span>02</span><PencilIcon /><div><h3>It draws with geometry</h3><p>Lines, arcs, and shapes. No text, image generation, or shortcuts.</p></div></article>
-        <article><span>03</span><SparkIcon /><div><h3>You guess—then swap</h3><p>Draw for the agent and watch it submit a WebMCP guess.</p></div></article>
-      </section>
-    </main>
-  );
-}
-
-function HeroSketch() {
-  return (
-    <div className="hero-sketch" aria-hidden="true">
-      <svg viewBox="0 0 520 255">
-        <path className="sketch-line slow" d="M78 197c24-62 46-103 74-126 19 37 38 82 47 125M103 141h76M88 198h124" />
-        <path className="sketch-line cobalt medium" d="M277 186c-14-74 4-118 56-135 55 24 68 69 48 135M279 186h103M309 92c20 18 43 18 68 2" />
-        <circle className="sketch-line coral quick" cx="329" cy="89" r="7" />
-        <circle className="sketch-line coral quick" cx="359" cy="89" r="7" />
-        <path className="sketch-line coral slow" d="M318 128c18 14 36 14 54 0" />
-      </svg>
-      <span className="guess-bubble guess-one">A bridge?</span>
-      <span className="guess-bubble guess-two"><BotIcon /> Eiffel Tower! <CheckIcon /></span>
-      <span className="agent-cursor"><BotIcon /><small>Agent is drawing</small></span>
-    </div>
-  );
-}
-
-function Lobby({ snapshot, seatId, busy, lens, onCommand, copiedInvite, onCopyInvite }: {
-  snapshot: RoomSnapshot;
-  seatId: string;
-  busy: boolean;
-  lens: React.ReactNode;
-  onCommand(command: Parameters<ReturnType<typeof useRoomSession>["command"]>[0]): Promise<unknown>;
-  copiedInvite: InviteAudience | null;
-  onCopyInvite(audience: InviteAudience): void;
-}) {
-  const self = snapshot.seats.find((seat) => seat.id === seatId);
-  const teams: TeamId[] = ["cobalt", "coral"];
-  if (!self) return null;
-  const activeSeats = snapshot.seats.filter((seat) => seat.isConnected);
-  const allReady = activeSeats.every((seat) => seat.isReady);
-  const enoughPlayers = snapshot.mode === "practice"
-    ? activeSeats.length >= 2
-    : teams.every((team) => activeSeats.filter((seat) => seat.team === team).length >= 2);
-
-  if (snapshot.mode === "practice") {
-    const drawingsEach = snapshot.totalRounds / 2;
-    return <main className="lobby-page practice-lobby">
-      <section className="lobby-heading"><div><span className="eyebrow">Practice Pair</span><h1>Invite your browser agent.</h1><p>The room starts automatically after a separate agent seat joins through WebMCP.</p></div><InviteCard roomCode={snapshot.roomCode} copiedInvite={copiedInvite} onCopyInvite={onCopyInvite} /></section>
-      <div className="practice-lobby-grid">
-        <section className="practice-duo-card">
-          {snapshot.seats.map((seat, index) => <div className="practice-player" key={seat.id}><span className={`avatar ${seat.controller}`}>{seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}</span><div><small>{seat.controller === "agent" ? "BROWSER AGENT" : "HUMAN PLAYER"}</small><strong>{seat.name}{seat.id === seatId ? " (you)" : ""}</strong><span><CheckIcon /> Ready</span></div>{index === 0 ? <b>↔</b> : null}</div>)}
-          <div className="practice-explainer"><SparkIcon /><p><strong>{snapshot.totalRounds} alternating rounds:</strong> your agent draws first, then you switch roles. You each draw {drawingsEach} {drawingsEach === 1 ? "time" : "times"}.</p></div>
-          <p className="waiting-host"><span className="pulse-dot" />{enoughPlayers ? "Agent joined — opening the first round…" : "Waiting for an agent to call play_mcpencil…"}</p>
-        </section>
-        <aside className="lobby-controls">
-          <GameSettingsCard snapshot={snapshot} self={self} busy={busy} onConfigure={(totalRounds, roundDurationMs) => onCommand({ type: "configure_match", totalRounds, roundDurationMs, origin: "human-ui" })} />
-          {lens}
-        </aside>
-      </div>
-    </main>;
-  }
-
-  return (
-    <main className="lobby-page">
-      <section className="lobby-heading">
-        <div><span className="eyebrow">Team Arena</span><h1>Assemble your sketch squad.</h1><p>Mix humans and agents freely. The same rules—and the same canvas—apply to everyone.</p></div>
-        <InviteCard roomCode={snapshot.roomCode} copiedInvite={copiedInvite} onCopyInvite={onCopyInvite} />
-      </section>
-
-      <div className="lobby-content">
-        <section className="team-board">
-          {teams.map((team) => <article className={`team-column team-${team}`} key={team}>
-            <header><span className="team-pattern" /><div><small>TEAM</small><h2>{team === "cobalt" ? "Cobalt" : "Coral"}</h2></div><strong>{snapshot.seats.filter((seat) => seat.team === team).length}/4</strong></header>
-            <div className="seat-stack">
-              {snapshot.seats.filter((seat) => seat.team === team).map((seat) => <SeatCard key={seat.id} seat={seat} isSelf={seat.id === seatId} />)}
-              {Array.from({ length: Math.max(1, 3 - snapshot.seats.filter((seat) => seat.team === team).length) }).slice(0, 2).map((_, index) => <div className="empty-seat" key={index}><span>+</span> Open seat</div>)}
-            </div>
-          </article>)}
-        </section>
-
-        <aside className="lobby-controls">
-          <section className="control-card"><span className="eyebrow">Your seat</span><h3>{self.name}</h3>
-            <label>Team</label><div className="segmented"><button type="button" className={self.team === "cobalt" ? "active cobalt" : ""} onClick={() => void onCommand({ type: "configure_seat", team: "cobalt", controller: self.controller })}>Cobalt</button><button type="button" className={self.team === "coral" ? "active coral" : ""} onClick={() => void onCommand({ type: "configure_seat", team: "coral", controller: self.controller })}>Coral</button></div>
-            <label>Controller</label><div className="segmented"><button type="button" className={self.controller === "human" ? "active" : ""} onClick={() => void onCommand({ type: "configure_seat", team: self.team, controller: "human" })}><PeopleIcon /> Human</button><button type="button" className={self.controller === "agent" ? "active" : ""} onClick={() => void onCommand({ type: "configure_seat", team: self.team, controller: "agent" })}><BotIcon /> Agent</button></div>
-            {self.controller === "human" ? <button className={`ready-button ${self.isReady ? "is-ready" : ""}`} type="button" disabled={busy} onClick={() => void onCommand({ type: "ready_up", ready: !self.isReady, origin: "human-ui" })}>{self.isReady ? <><CheckIcon /> Ready!</> : "I’m ready"}</button> : <div className="agent-guess-note"><BotIcon /><div><strong>Agent seat is ready.</strong><span>No extra ready-up call required.</span></div></div>}
-          </section>
-          <GameSettingsCard snapshot={snapshot} self={self} busy={busy} onConfigure={(totalRounds, roundDurationMs) => onCommand({ type: "configure_match", totalRounds, roundDurationMs, origin: "human-ui" })} />
-          {self.isHost ? self.controller === "human" ? <button className="primary-button jumbo" type="button" disabled={busy || !allReady || !enoughPlayers} onClick={() => void onCommand({ type: "start_match", origin: "human-ui" })}>{!enoughPlayers ? "Need 2 live players on each team" : !allReady ? `Waiting for ${activeSeats.filter((seat) => !seat.isReady).length} player${activeSeats.filter((seat) => !seat.isReady).length === 1 ? "" : "s"}…` : <>Start match <ArrowIcon /></>}</button> : <p className="waiting-host"><span className="pulse-dot" />The agent host can start with <code>start_match</code>.</p> : <p className="waiting-host"><span className="pulse-dot" />Waiting for the host to start…</p>}
-          {lens}
-        </aside>
-      </div>
-    </main>
-  );
-}
-
-function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
-  snapshot: RoomSnapshot;
-  self: RoomSnapshot["seats"][number];
-  busy: boolean;
-  onConfigure(totalRounds: number, roundDurationMs: number): Promise<unknown>;
-}) {
-  const roundOptions = snapshot.mode === "practice" ? PRACTICE_ROUND_OPTIONS : ARENA_ROUND_OPTIONS;
-  const humanHost = self.isHost && self.controller === "human";
-  const canEdit = humanHost && !busy;
-  const status = busy && humanHost
-    ? "Saving room settings…"
-    : !self.isHost
-      ? "Only the human host can change these settings."
-      : self.controller === "agent"
-        ? "Switch the host seat to Human to change settings here."
-        : "You’re the host — changes update for everyone.";
-
-  return <section className={`settings-card ${canEdit ? "is-editable" : "is-locked"}`} aria-labelledby="game-settings-title">
-    <header>
-      <div><span className="eyebrow">Before you play</span><h3 id="game-settings-title">Game settings</h3></div>
-      <span className="settings-summary" aria-label={`${snapshot.totalRounds} rounds, ${snapshot.roundDurationMs / 1000} seconds each`}>{snapshot.totalRounds} × {snapshot.roundDurationMs / 1000}s</span>
-    </header>
-    <fieldset disabled={!canEdit}>
-      <legend>Number of rounds</legend>
-      <div className="settings-options" aria-label="Number of rounds">
-        {roundOptions.map((rounds) => <button
-          type="button"
-          key={rounds}
-          className={snapshot.totalRounds === rounds ? "is-selected" : ""}
-          aria-pressed={snapshot.totalRounds === rounds}
-          onClick={() => void onConfigure(rounds, snapshot.roundDurationMs)}
-        >{rounds}</button>)}
-      </div>
-    </fieldset>
-    <fieldset disabled={!canEdit}>
-      <legend>Drawing time</legend>
-      <div className="settings-options" aria-label="Drawing time in seconds">
-        {ROUND_DURATION_OPTIONS_MS.map((durationMs) => <button
-          type="button"
-          key={durationMs}
-          className={snapshot.roundDurationMs === durationMs ? "is-selected" : ""}
-          aria-pressed={snapshot.roundDurationMs === durationMs}
-          onClick={() => void onConfigure(snapshot.totalRounds, durationMs)}
-        >{durationMs / 1000}s</button>)}
-      </div>
-    </fieldset>
-    <p className="settings-status" role="status"><span className={canEdit ? "settings-edit-mark" : "settings-lock-mark"} aria-hidden="true">{canEdit ? "✎" : "•"}</span>{status}</p>
-  </section>;
-}
-
-function InviteCard({ roomCode, copiedInvite, onCopyInvite }: {
-  roomCode: string;
-  copiedInvite: InviteAudience | null;
-  onCopyInvite(audience: InviteAudience): void;
-}) {
-  return <section className="invite-card" aria-label={`Invite players to room ${roomCode}`}>
-    <small>Share room</small>
-    <strong>{roomCode}</strong>
-    <div className="invite-actions">
-      <button type="button" onClick={() => onCopyInvite("person")}>
-        {copiedInvite === "person" ? <CheckIcon /> : <PeopleIcon />}
-        <span>{copiedInvite === "person" ? "Person link copied" : "Invite a person"}</span>
-      </button>
-      <button className="agent-invite-button" type="button" onClick={() => onCopyInvite("agent")}>
-        {copiedInvite === "agent" ? <CheckIcon /> : <BotIcon />}
-        <span>{copiedInvite === "agent" ? "AI prompt copied" : "Invite an AI player"}</span>
-      </button>
-    </div>
-  </section>;
-}
-
-function SeatCard({ seat, isSelf }: { seat: RoomSnapshot["seats"][number]; isSelf: boolean }) {
-  return <div className={`seat-card ${seat.isReady ? "is-ready" : ""} ${!seat.isConnected ? "is-away" : ""}`}>
-    <span className={`avatar ${seat.controller}`} aria-hidden="true">{seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}</span>
-    <div><strong>{seat.name}{isSelf ? " (you)" : ""}</strong><small>{seat.isHost ? "Host · " : ""}{seat.controller === "agent" ? "Browser agent" : "Human player"}</small></div>
-    <span className="seat-status">{!seat.isConnected ? "Away" : seat.isReady ? <CheckIcon /> : "…"}</span>
-  </div>;
 }
 
 function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, onPrompt, onReplay, onPlayAgain, privatePromptGate, onHidePrivatePrompt, playSound }: {
@@ -658,8 +373,9 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
     return (
       <main className="private-prompt-page">
         <section className="private-prompt-card" aria-live="polite">
+          <span className="tape" aria-hidden="true" />
           <span className="private-prompt-icon"><PencilIcon /></span>
-          <span className="eyebrow">Private human prompt</span>
+          <span className="eyebrow">Psst — your secret word</span>
           <h1>{prompt?.prompt ?? (promptError ? "Prompt unavailable" : "Opening your prompt…")}</h1>
           <p>{prompt ? `${prompt.category} · memorize this, then hide it. Your first stroke starts the ${roundDurationSeconds}-second clock.` : promptError ?? "Only you should look at this card."}</p>
           <div className="private-prompt-warning"><span aria-hidden="true">◉̸</span> The agent’s <code>submit_guesses</code> tool stays disabled until your first stroke.</div>
@@ -680,14 +396,30 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
     );
   }
 
+  const practice = snapshot.mode === "practice";
+
   return (
     <main className="game-page">
       <section className="game-scorebar">
-        <TeamScore team="cobalt" score={snapshot.scores.cobalt} active={snapshot.activeTeam === "cobalt"} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
-        <div className={`round-timer ${seconds <= 15 ? "is-urgent" : ""}`} style={{ "--timer-progress": timerProgress } as React.CSSProperties}>
-          <small>{snapshot.phase === "round-prep" ? "PREP · " : snapshot.phase === "round-end" ? "RESULT · " : ""}ROUND {snapshot.roundIndex + 1} / {snapshot.totalRounds}</small><strong>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</strong><span>{timerLabel}</span>
-        </div>
-        <TeamScore team="coral" score={snapshot.scores.coral} active={snapshot.activeTeam === "coral"} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
+        {practice ? (
+          <PracticeScoreCard score={snapshot.scores.cobalt + snapshot.scores.coral} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
+        ) : (
+          <TeamScore team="cobalt" score={snapshot.scores.cobalt} active={snapshot.activeTeam === "cobalt"} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
+        )}
+        <TimerDial
+          seconds={seconds}
+          progress={timerProgress}
+          urgent={snapshot.phase === "drawing" && seconds <= 15}
+          phasePrefix={snapshot.phase === "round-prep" ? "PREP · " : snapshot.phase === "round-end" ? "RESULT · " : ""}
+          roundIndex={snapshot.roundIndex}
+          totalRounds={snapshot.totalRounds}
+          label={timerLabel}
+        />
+        {practice ? (
+          <ArtistCard artist={artist ?? null} isPrep={isPrep} />
+        ) : (
+          <TeamScore team="coral" score={snapshot.scores.coral} active={snapshot.activeTeam === "coral"} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
+        )}
       </section>
 
       <LiveGuessBanner guesses={snapshot.guesses} roundIndex={snapshot.roundIndex} />
@@ -716,8 +448,8 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
           </section>
 
           <aside className="game-sidebar">
-            {lens}
             <GuessFeed snapshot={snapshot} />
+            {lens}
           </aside>
         </div>
       )}
@@ -727,6 +459,66 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
 
 function TeamScore({ team, score, active, seats, artistId }: { team: TeamId; score: number; active: boolean; seats: RoomSnapshot["seats"]; artistId: string | null }) {
   return <div className={`team-score team-${team} ${active ? "is-active" : ""}`}><span className="team-pattern" /><div><small>TEAM {team.toUpperCase()}</small><strong>{score}</strong></div><div className="score-avatars">{seats.filter((seat) => seat.team === team).map((seat) => <span key={seat.id} className={`mini-avatar ${seat.id === artistId ? "is-artist" : ""}`}>{seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}</span>)}</div></div>;
+}
+
+function PracticeScoreCard({ score, seats, artistId }: { score: number; seats: RoomSnapshot["seats"]; artistId: string | null }) {
+  return (
+    <div className="team-score practice-score is-active">
+      <span className="team-pattern" />
+      <div><small>PAIR POINTS</small><strong>{score}</strong></div>
+      <div className="score-avatars">
+        {seats.map((seat) => (
+          <span key={seat.id} className={`mini-avatar ${seat.id === artistId ? "is-artist" : ""}`}>
+            {seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ArtistCard({ artist, isPrep }: { artist: RoomSnapshot["seats"][number] | null; isPrep: boolean }) {
+  return (
+    <div className="artist-card">
+      <span className={`avatar ${artist?.controller ?? "human"}`} aria-hidden="true">
+        {artist?.controller === "agent" ? <BotIcon /> : artist?.name.slice(0, 1).toUpperCase() ?? "?"}
+      </span>
+      <div>
+        <small>{isPrep ? "OPENING STROKE" : "NOW DRAWING"}</small>
+        <strong>{artist?.name ?? "…"}</strong>
+        <span>{artist?.controller === "agent" ? "Browser agent" : "Human player"}</span>
+      </div>
+      <PencilIcon />
+    </div>
+  );
+}
+
+function TimerDial({ seconds, progress, urgent, phasePrefix, roundIndex, totalRounds, label }: {
+  seconds: number;
+  progress: number;
+  urgent: boolean;
+  phasePrefix: string;
+  roundIndex: number;
+  totalRounds: number;
+  label: string;
+}) {
+  return (
+    <div className={`round-timer ${urgent ? "is-urgent" : ""}`} style={{ "--timer-progress": progress } as React.CSSProperties}>
+      <span className="timer-dial" aria-hidden="true">
+        <svg viewBox="0 0 100 100">
+          <circle className="dial-ticks" cx="50" cy="50" r="43" pathLength={60} />
+          <circle className="dial-track" cx="50" cy="50" r="43" pathLength={1} />
+          <circle className="dial-fill" cx="50" cy="50" r="43" pathLength={1} />
+        </svg>
+        <b className="dial-knob" />
+      </span>
+      <div className="timer-readout">
+        <small>{phasePrefix}ROUND {roundIndex + 1} / {totalRounds}</small>
+        <strong>{String(Math.floor(seconds / 60)).padStart(2, "0")}:{String(seconds % 60).padStart(2, "0")}</strong>
+        <span>{label}</span>
+      </div>
+    </div>
+  );
 }
 
 function GuessFeed({ snapshot }: { snapshot: RoomSnapshot }) {
@@ -802,19 +594,96 @@ function RoundEnd({ snapshot, seatId, seconds, onNext, busy, lens }: { snapshot:
   const modeName = getModeDefinition(snapshot.mode).name;
   const finalRound = snapshot.roundIndex + 1 >= snapshot.totalRounds;
   const self = snapshot.seats.find((seat) => seat.id === seatId);
+  const artist = snapshot.seats.find((seat) => seat.id === snapshot.artistSeatId);
   const liveSeats = snapshot.seats.filter((seat) => seat.isConnected);
   const readyCount = liveSeats.filter((seat) => seat.isReady).length;
   const guesses = snapshot.guesses
     .filter((guess) => guess.roundIndex === snapshot.roundIndex)
     .slice()
     .sort((left, right) => left.createdAt - right.createdAt);
+  const drawing = snapshot.canvas
+    .slice()
+    .sort((left, right) => left.createdAt - right.createdAt);
   const selfReady = self?.isReady ?? false;
+  const solved = Boolean(result?.pointsAwarded);
 
-  return <div className="round-end-layout"><section className="round-result-card"><div className="confetti" aria-hidden="true">✦ · ✎ · ✦ ·</div><span className="eyebrow">{modeName} · Round {snapshot.roundIndex + 1} complete</span><h1>{result?.pointsAwarded ? "That was the idea!" : "Time’s up!"}</h1><p className="revealed-answer">{result?.prompt ?? "Prompt unavailable"}</p><div className="round-stat-row"><div><small>Points</small><strong>+{result?.pointsAwarded ?? 0}</strong></div><div><small>Guessed in</small><strong>{result?.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"}</strong></div><div><small>Vector marks</small><strong>{result?.strokeCount ?? 0}</strong></div><div><small>WebMCP calls</small><strong>{result?.toolCallCount ?? 0}</strong></div></div>
-    <div className="result-transition" role="status" aria-live="polite"><span className="result-countdown">{seconds > 0 ? `0:${String(seconds).padStart(2, "0")}` : "Advancing…"}</span><div><strong>{finalRound ? "Match results unlock after the scoreboard." : "The next round opens after the scoreboard."}</strong><small>Results remain visible for at least 8 seconds · {readyCount}/{liveSeats.length} connected players ready</small></div></div>
-    <section className="round-guess-history" aria-label={`Every guess from round ${snapshot.roundIndex + 1}`}><header><div><span className="eyebrow">Complete transcript</span><h2>Every guess this round</h2></div><span>{guesses.length}</span></header><div className="round-guess-list">{guesses.map((guess) => <GuessEntry guess={guess} key={guess.id} />)}{guesses.length === 0 ? <p className="no-round-guesses">No accepted guesses this round.</p> : null}</div></section>
-    {self?.controller === "human" ? <button className="primary-button jumbo" type="button" onClick={() => void onNext()} disabled={busy || selfReady}>{selfReady ? <><CheckIcon /> Ready recorded</> : <>{finalRound ? "Ready for match results" : `Ready for round ${snapshot.roundIndex + 2}`}<ArrowIcon /></>}</button> : <div className={`agent-guess-note ${selfReady ? "is-ready" : ""}`}><BotIcon /><div><strong>{selfReady ? "Agent readiness recorded." : <>Your agent has <code>ready_next</code>.</>}</strong><span>{selfReady ? "The authoritative results countdown controls the transition." : "Ask it to continue through WebMCP; the results stay visible for at least 8 seconds."}</span></div></div>}
-  </section><aside className="round-lens">{lens}</aside></div>;
+  return (
+    <div className="round-end-layout">
+      <section className="round-result-card">
+        <span className="eyebrow">{modeName} · Round {snapshot.roundIndex + 1} of {snapshot.totalRounds} complete</span>
+        <h1>{solved ? "That was the idea!" : "Time’s up!"}</h1>
+        <p className="revealed-answer-label">The word was</p>
+        <p className={`revealed-answer ${solved ? "is-solved" : "is-missed"}`}>
+          <svg className="answer-circle" viewBox="0 0 300 100" preserveAspectRatio="none" aria-hidden="true">
+            <path d="M22 55C40 24 116 12 194 16c62 3 88 18 84 38-5 26-72 36-146 33C64 84 18 74 22 51" />
+          </svg>
+          {result?.prompt ?? "Prompt unavailable"}
+        </p>
+        <div className="round-stat-row">
+          <div><small>Points</small><strong>+{result?.pointsAwarded ?? 0}</strong></div>
+          <div><small>Guessed in</small><strong>{result?.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"}</strong></div>
+          <div><small>Vector marks</small><strong>{result?.strokeCount ?? 0}</strong></div>
+          <div><small>WebMCP calls</small><strong>{result?.toolCallCount ?? 0}</strong></div>
+        </div>
+        <div className="result-transition" role="status" aria-live="polite">
+          <span className="result-countdown">{seconds > 0 ? `0:${String(seconds).padStart(2, "0")}` : "Advancing…"}</span>
+          <div>
+            <strong>{finalRound ? "Match results unlock after the scoreboard." : "The next round opens after the scoreboard."}</strong>
+            <small>Results remain visible for at least 8 seconds · {readyCount}/{liveSeats.length} connected players ready</small>
+          </div>
+        </div>
+        {self?.controller === "human" ? (
+          <button className="primary-button jumbo next-page-button" type="button" onClick={() => void onNext()} disabled={busy || selfReady}>
+            {selfReady ? <><CheckIcon /> Ready recorded</> : <>{finalRound ? "Ready for match results" : `Ready for round ${snapshot.roundIndex + 2}`}<ArrowIcon /></>}
+          </button>
+        ) : (
+          <div className={`agent-guess-note ${selfReady ? "is-ready" : ""}`}>
+            <BotIcon />
+            <div>
+              <strong>{selfReady ? "Agent readiness recorded." : <>Your agent has <code>ready_next</code>.</>}</strong>
+              <span>{selfReady ? "The authoritative results countdown controls the transition." : "Ask it to continue through WebMCP; the results stay visible for at least 8 seconds."}</span>
+            </div>
+          </div>
+        )}
+      </section>
+
+      <section className="sketch-review-card" aria-label={`Round ${snapshot.roundIndex + 1} finished drawing`}>
+        <span className="tape" aria-hidden="true" />
+        <header>
+          <span className="eyebrow">Sketch review</span>
+          <h2>{artist ? `Drawn by ${artist.name}` : "The finished sketch"}</h2>
+        </header>
+        <svg className="finished-drawing" viewBox="0 0 1000 700" role="img" aria-label={`Finished round ${snapshot.roundIndex + 1} drawing`}>
+          <rect width="1000" height="700" rx="18" fill="#fffdf7" />
+          {drawing.map((event) => (
+            <PrimitiveMark key={event.id} primitive={event.primitive} origin={event.origin} />
+          ))}
+          {drawing.length === 0 ? (
+            <text x="500" y="360" textAnchor="middle" fontSize="40" fill="#a39b8a" fontFamily="Caveat, cursive">
+              (a perfectly blank page)
+            </text>
+          ) : null}
+        </svg>
+        <p className="sketch-review-note">
+          {artist?.controller === "agent" ? <><BotIcon /> Drawn stroke-by-stroke through WebMCP</> : <><PeopleIcon /> Drawn by hand in the browser</>}
+          <span>{drawing.length} {drawing.length === 1 ? "mark" : "marks"}</span>
+        </p>
+      </section>
+
+      <section className="round-guess-history" aria-label={`Every guess from round ${snapshot.roundIndex + 1}`}>
+        <header>
+          <div><span className="eyebrow">Complete transcript</span><h2>Every guess this round</h2></div>
+          <span>{guesses.length}</span>
+        </header>
+        <div className="round-guess-list">
+          {guesses.map((guess) => <GuessEntry guess={guess} key={guess.id} />)}
+          {guesses.length === 0 ? <p className="no-round-guesses">No accepted guesses this round.</p> : null}
+        </div>
+      </section>
+
+      <aside className="round-lens">{lens}</aside>
+    </div>
+  );
 }
 
 function MatchEnd({ snapshot, seatId, lens, onReplay, onPlayAgain }: { snapshot: RoomSnapshot; seatId: string; lens: React.ReactNode; onReplay(signal?: AbortSignal): Promise<ReplayPayload>; onPlayAgain(): void }) {
@@ -842,7 +711,33 @@ function MatchEnd({ snapshot, seatId, lens, onReplay, onPlayAgain }: { snapshot:
   const exhibition = snapshot.mode === "exhibition";
   const practiceTurnsEach = snapshot.totalRounds / 2;
   const practiceTurnLabel = practiceTurnsEach === 1 ? "drawing" : "drawings";
-  return <main className="match-end-page"><section className="winner-banner"><span className="eyebrow">{practice ? `${snapshot.totalRounds}-round Practice Pair complete` : exhibition ? "Exhibition final" : "Team Arena final"}</span><h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : exhibition ? `${winner === "cobalt" ? "Cobalt" : "Coral"} owns the exhibition.` : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>{practice ? <div className="practice-complete"><PeopleIcon /><span>↔</span><BotIcon /></div> : <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>}<p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : exhibition ? "Same canvas. Same rules. Human and agent provenance preserved." : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p></section><div className="end-content"><ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} /><aside>{lens}<button className="secondary-button full" type="button" onClick={onPlayAgain}>Play another match</button></aside></div></main>;
+  return (
+    <main className="match-end-page">
+      <section className={`winner-banner ${winner !== "tie" && !practice ? `winner-${winner}` : ""}`}>
+        <span className="winner-rosette" aria-hidden="true">
+          <b>{practice ? "SKETCH" : "BEST IN"}</b>
+          <strong>{practice ? "DUO" : "SHOW"}</strong>
+        </span>
+        <div className="winner-banner-copy">
+          <span className="eyebrow">{practice ? `${snapshot.totalRounds}-round Practice Pair complete` : exhibition ? "Exhibition final" : "Team Arena final"}</span>
+          <h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : exhibition ? `${winner === "cobalt" ? "Cobalt" : "Coral"} owns the exhibition.` : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>
+          <p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : exhibition ? "Same canvas. Same rules. Human and agent provenance preserved." : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p>
+        </div>
+        {practice ? (
+          <div className="practice-complete" aria-hidden="true"><PeopleIcon /><span>↔</span><BotIcon /></div>
+        ) : (
+          <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>
+        )}
+      </section>
+      <div className="end-content">
+        <ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} />
+        <aside>
+          {lens}
+          <button className="secondary-button full" type="button" onClick={onPlayAgain}>Play another match</button>
+        </aside>
+      </div>
+    </main>
+  );
 }
 
 function LoadingScreen() {

@@ -2,8 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import { isAgentInviteUrl, roomCodeFromUrl } from "./invite";
-import "./styles.css";
-import "./overhaul.css";
+import "./styles/theme.css";
+import "./styles/flipbook.css";
+import "./styles/pages.css";
 
 const currentUrl = new URL(window.location.href);
 const invitedRoomCode = roomCodeFromUrl(currentUrl) ?? "";

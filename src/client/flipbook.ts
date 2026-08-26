@@ -15,6 +15,15 @@ function folio(page: number): string {
   return String(page).padStart(2, "0");
 }
 
+export type FlipDirection = "forward" | "back";
+
+export function flipDirection(from: FlipbookView, to: FlipbookView): FlipDirection {
+  const fromFolio = Number.parseInt(from.folio, 10);
+  const toFolio = Number.parseInt(to.folio, 10);
+  if (Number.isNaN(fromFolio) || Number.isNaN(toFolio)) return "forward";
+  return toFolio >= fromFolio ? "forward" : "back";
+}
+
 export function describeFlipbookView(
   snapshot: RoomSnapshot | null,
   promptGate: HumanPromptGate,

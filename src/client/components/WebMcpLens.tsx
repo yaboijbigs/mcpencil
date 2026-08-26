@@ -43,6 +43,9 @@ export function WebMcpLens({
   const authorized = actionableTools ?? tools;
   const descriptors = registeredTools ?? authorized.map(legacyDescriptor);
   const timeline = buildTimeline(invocations, activity, authorizationEvents);
+  const latestInvocation = invocations.length
+    ? invocations.reduce((latest, candidate) => (candidate.startedAt > latest.startedAt ? candidate : latest))
+    : null;
   const toolTabId = `${tabId}-tools-tab`;
   const traceTabId = `${tabId}-trace-tab`;
   const toolPanelId = `${tabId}-tools-panel`;
@@ -50,6 +53,7 @@ export function WebMcpLens({
 
   return (
     <aside className={`lens webmcp-proof ${open ? "is-open" : "is-closed"}`} aria-label="WebMCP Proof">
+      <span className="lens-clip" aria-hidden="true" />
       <button className="lens-heading" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span className="lens-orb"><EyeIcon /></span>
         <span>
@@ -62,6 +66,19 @@ export function WebMcpLens({
         </span>
         <ChevronIcon className="lens-chevron" />
       </button>
+
+      {!open && latestInvocation ? (
+        <div className="lens-ticker" aria-live="polite">
+          <span className={`ticker-state ${latestInvocation.status}`}>
+            {latestInvocation.status === "ok" ? <CheckIcon /> : latestInvocation.status === "error" ? <XIcon /> : <span className="mini-spinner" />}
+          </span>
+          <code>{latestInvocation.tool}</code>
+          <span className="ticker-summary">{latestInvocation.inputSummary}</span>
+          <time dateTime={new Date(latestInvocation.startedAt).toISOString()}>
+            {latestInvocation.durationMs === undefined ? "running" : `${latestInvocation.durationMs}ms`}
+          </time>
+        </div>
+      ) : null}
 
       {open ? <div className="lens-body">
         {!supported ? <div className="lens-notice">

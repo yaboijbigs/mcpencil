@@ -115,10 +115,18 @@ function PracticeLobby({
           </header>
 
           <div className="practice-seat-row">
-            {snapshot.seats.map((seat) => (
-              <PracticeSeat key={seat.id} seat={seat} isSelf={seat.id === self.id} />
+            {snapshot.seats.map((seat, index) => (
+              <span className="practice-seat-slot" key={seat.id}>
+                {index > 0 ? <b className="practice-duo-arrow" aria-hidden="true">↔</b> : null}
+                <PracticeSeat seat={seat} isSelf={seat.id === self.id} />
+              </span>
             ))}
-            {snapshot.seats.length < 2 ? <OpenPracticeSeat controller={missingController} /> : null}
+            {snapshot.seats.length < 2 ? (
+              <span className="practice-seat-slot">
+                {snapshot.seats.length > 0 ? <b className="practice-duo-arrow" aria-hidden="true">↔</b> : null}
+                <OpenPracticeSeat controller={missingController} />
+              </span>
+            ) : null}
           </div>
 
           <div className="practice-leg-grid">
@@ -271,14 +279,15 @@ function TeamLobby({
 
 function PracticeSeat({ seat, isSelf }: { seat: Seat; isSelf: boolean }) {
   return (
-    <article className={`practice-player ${!seat.isConnected ? "is-away" : ""}`}>
-      <span className={`avatar ${seat.controller}`} aria-hidden="true">
-        {seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}
+    <article className={`practice-polaroid is-${seat.controller} ${!seat.isConnected ? "is-away" : ""}`}>
+      <span className="tape" aria-hidden="true" />
+      <span className="polaroid-photo" aria-hidden="true">
+        {seat.controller === "agent" ? <BotIcon /> : <b>{seat.name.slice(0, 1).toUpperCase()}</b>}
       </span>
-      <div>
-        <small>{seat.controller === "agent" ? "BROWSER AGENT" : "HUMAN PLAYER"}</small>
+      <div className="polaroid-caption">
         <strong>{seat.name}{isSelf ? " (you)" : ""}</strong>
-        <span>{seat.isConnected ? <><CheckIcon /> Ready</> : "Disconnected"}</span>
+        <small>{seat.controller === "agent" ? "Browser agent" : "Human player"}</small>
+        <span className="polaroid-status">{seat.isConnected ? <><CheckIcon /> Here</> : "Disconnected"}</span>
       </div>
     </article>
   );
@@ -286,14 +295,15 @@ function PracticeSeat({ seat, isSelf }: { seat: Seat; isSelf: boolean }) {
 
 function OpenPracticeSeat({ controller }: { controller: ControllerType }) {
   return (
-    <article className="practice-player open-practice-seat">
-      <span className={`avatar ${controller}`} aria-hidden="true">
+    <article className="practice-polaroid open-practice-seat">
+      <span className="tape" aria-hidden="true" />
+      <span className="polaroid-photo" aria-hidden="true">
         {controller === "agent" ? <BotIcon /> : <PeopleIcon />}
       </span>
-      <div>
-        <small>{controller === "agent" ? "BROWSER AGENT" : "HUMAN PLAYER"}</small>
+      <div className="polaroid-caption">
         <strong>Open seat</strong>
-        <span>Waiting to join</span>
+        <small>{controller === "agent" ? "Browser agent" : "Human player"}</small>
+        <span className="polaroid-status is-waiting">Waiting to join…</span>
       </div>
     </article>
   );
@@ -419,7 +429,7 @@ function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
   return (
     <section className={`settings-card ${canEdit ? "is-editable" : "is-locked"}`} aria-labelledby="game-settings-title">
       <header>
-        <div><span className="eyebrow">Before you play</span><h3 id="game-settings-title">Game settings</h3></div>
+        <div><span className="eyebrow">Before you play</span><h3 id="game-settings-title">House rules</h3></div>
         <span className="settings-summary" aria-label={`${snapshot.totalRounds} rounds, ${snapshot.roundDurationMs / 1000} seconds each`}>
           {snapshot.totalRounds} × {snapshot.roundDurationMs / 1000}s
         </span>
