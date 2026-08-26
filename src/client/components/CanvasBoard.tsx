@@ -66,14 +66,25 @@ export function CanvasBoard({
   const [strokeWidth, setStrokeWidth] = useState<StrokeWidth>(7);
   const [gesture, setGesture] = useState<Gesture | null>(null);
   const [localBusy, setLocalBusy] = useState(false);
-  const animatedEvents = useMemo(() => {
-    const batchPositions = new Map<string, number>();
-    return events.map((event) => {
-      const position = batchPositions.get(event.batchId) ?? 0;
-      batchPositions.set(event.batchId, position + 1);
-      return { event, delayMs: event.origin === "webmcp" ? Math.min(position, 11) * 115 : 0 };
-    });
-  }, [events]);
+  const prefersReducedMotion = usePrefersReducedMotion();
+  const [revealedEventIds, setRevealedEventIds] = useState<Set<string>>(
+    () => new Set(events.map((event) => event.id)),
+  );
+  const [revealQueue, setRevealQueue] = useState<string[]>([]);
+  const revealQueueLengthRef = useRef(revealQueue.length);
+  revealQueueLengthRef.current = revealQueue.length;
+  const knownEventIdsRef = useRef(new Set(events.map((event) => event.id)));
+  const seenEventIdsRef = useRef(new Set(events.map((event) => event.id)));
+  const canonicalEventIdsRef = useRef(new Set(events.map((event) => event.id)));
+  const progressiveEventIdsRef = useRef(new Set<string>());
+  const activeRoundIndexRef = useRef<number | null>(events.at(-1)?.roundIndex ?? null);
+  const visibleEvents = useMemo(
+    () => prefersReducedMotion
+      ? events
+      : events.filter((event) => event.origin !== "webmcp" || revealedEventIds.has(event.id)),
+    [events, prefersReducedMotion, revealedEventIds],
+  );
+  const nextRevealId = revealQueue[0] ?? null;
   const draft = useMemo(
     () =>
       gesture
@@ -81,6 +92,82 @@ export function CanvasBoard({
         : null,
     [color, gesture, strokeWidth, tool],
   );
+
+  useEffect(() => {
+    const canonicalIds = new Set(events.map((event) => event.id));
+    const currentRoundIndex = events.at(-1)?.roundIndex ?? null;
+    const roundChanged = currentRoundIndex !== null
+      && activeRoundIndexRef.current !== null
+      && currentRoundIndex !== activeRoundIndexRef.current;
+    const previouslyKnownIds = roundChanged ? new Set<string>() : knownEventIdsRef.current;
+    const incomingEvents = events.filter((event) => !previouslyKnownIds.has(event.id));
+    const restoredEventIds = new Set(
+      incomingEvents.filter((event) => seenEventIdsRef.current.has(event.id)).map((event) => event.id),
+    );
+
+    canonicalEventIdsRef.current = canonicalIds;
+    knownEventIdsRef.current = canonicalIds;
+    for (const event of events) seenEventIdsRef.current.add(event.id);
+    if (currentRoundIndex !== null) activeRoundIndexRef.current = currentRoundIndex;
+    progressiveEventIdsRef.current = new Set(
+      Array.from(progressiveEventIdsRef.current).filter((id) => canonicalIds.has(id)),
+    );
+    if (prefersReducedMotion) {
+      progressiveEventIdsRef.current.clear();
+    } else {
+      for (const event of incomingEvents) {
+        if (event.origin === "webmcp" && !restoredEventIds.has(event.id)) {
+          progressiveEventIdsRef.current.add(event.id);
+        }
+      }
+    }
+
+    setRevealedEventIds((current) => {
+      const next = new Set(Array.from(current).filter((id) => canonicalIds.has(id)));
+      for (const event of incomingEvents) {
+        if (prefersReducedMotion || event.origin !== "webmcp" || restoredEventIds.has(event.id)) {
+          next.add(event.id);
+        }
+      }
+      if (prefersReducedMotion) {
+        for (const event of events) next.add(event.id);
+      }
+      return next;
+    });
+
+    setRevealQueue((current) => {
+      if (prefersReducedMotion) return [];
+      const next = current.filter((id) => canonicalIds.has(id));
+      const queuedIds = new Set(next);
+      for (const event of incomingEvents) {
+        if (event.origin === "webmcp" && !restoredEventIds.has(event.id) && !queuedIds.has(event.id)) {
+          next.push(event.id);
+          queuedIds.add(event.id);
+        }
+      }
+      return next;
+    });
+  }, [events, prefersReducedMotion]);
+
+  useEffect(() => {
+    if (nextRevealId === null || prefersReducedMotion) return;
+    const timer = window.setTimeout(() => {
+      if (canonicalEventIdsRef.current.has(nextRevealId)) {
+        setRevealedEventIds((current) => {
+          if (current.has(nextRevealId)) return current;
+          const next = new Set(current);
+          next.add(nextRevealId);
+          return next;
+        });
+      }
+      setRevealQueue((current) =>
+        current[0] === nextRevealId
+          ? current.slice(1)
+          : current.filter((id) => id !== nextRevealId),
+      );
+    }, revealDelayFor(nextRevealId, revealQueueLengthRef.current));
+    return () => window.clearTimeout(timer);
+  }, [nextRevealId, prefersReducedMotion]);
 
   useEffect(() => {
     if (!canDraw) return;
@@ -201,7 +288,7 @@ export function CanvasBoard({
           >
             {STROKE_WIDTHS.map((width) => (
               <option key={width} value={width}>
-                {width === 3 ? "Fine" : width === 7 ? "Regular" : width === 12 ? "Bold" : "Chunky"}
+                {strokeWidthLabel(width)}
               </option>
             ))}
           </select>
@@ -228,6 +315,7 @@ export function CanvasBoard({
           viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}
           role="img"
           aria-label={canDraw ? "Draw here" : `Watching ${artistLabel ?? "the artist"} draw`}
+          aria-busy={revealQueue.length > 0 || undefined}
           onPointerDown={begin}
           onPointerMove={move}
           onPointerUp={(event) => void finish(event)}
@@ -245,13 +333,18 @@ export function CanvasBoard({
           <rect width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="#fffdf7" rx="18" />
           <rect width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="url(#dot-grid)" rx="18" />
           <g className="canonical-ink" filter="url(#ink-soften)">
-            {animatedEvents.map(({ event, delayMs }) => (
-              <PrimitiveMark key={event.id} primitive={event.primitive} origin={event.origin} delayMs={delayMs} />
+            {visibleEvents.map((event) => (
+              <PrimitiveMark
+                key={event.id}
+                primitive={event.primitive}
+                origin={event.origin}
+                animateArrival={progressiveEventIdsRef.current.has(event.id)}
+              />
             ))}
             {draft ? <PrimitiveMark primitive={draft} origin="human-ui" draft /> : null}
           </g>
         </svg>
-        {!canDraw && events.length === 0 ? (
+        {!canDraw && visibleEvents.length === 0 ? (
           <div className="empty-canvas-note" aria-hidden="true">
             <span className="pencil-scribble">✎</span>
             <strong>{artistLabel ? `${artistLabel} is thinking…` : "Waiting for the first stroke…"}</strong>
@@ -268,12 +361,12 @@ export function PrimitiveMark({
   primitive,
   origin,
   draft = false,
-  delayMs = 0,
+  animateArrival = false,
 }: {
   primitive: VectorPrimitive;
   origin: CanvasEvent["origin"];
   draft?: boolean;
-  delayMs?: number;
+  animateArrival?: boolean;
 }) {
   const shared = {
     stroke: COLOR_VALUES[primitive.color],
@@ -282,8 +375,7 @@ export function PrimitiveMark({
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
     vectorEffect: "non-scaling-stroke" as const,
-    className: `${draft ? "draft-mark" : "ink-mark"} origin-${origin}`,
-    style: delayMs ? { animationDelay: `${delayMs}ms` } : undefined,
+    className: `${draft ? "draft-mark" : "ink-mark"} origin-${origin}${animateArrival ? " is-revealing" : ""}`,
   };
 
   switch (primitive.type) {
@@ -393,4 +485,46 @@ function distance(a: Point, b: Point) {
 
 function clampAxis(value: number, maximum: number) {
   return Math.round(Math.max(0, Math.min(maximum, value)) * 10) / 10;
+}
+
+function strokeWidthLabel(width: StrokeWidth) {
+  if (width === 3) return "Fine";
+  if (width === 5) return "Medium";
+  if (width === 7) return "Regular";
+  if (width === 12) return "Bold";
+  return "Chunky";
+}
+
+function revealDelayFor(eventId: string, backlog: number) {
+  const [minimum, range] = backlog > 18
+    ? [24, 16]
+    : backlog > 10
+      ? [40, 25]
+      : backlog > 6
+        ? [55, 30]
+        : [70, 40];
+  let hash = 0;
+  for (let index = 0; index < eventId.length; index += 1) {
+    hash = (hash * 31 + eventId.charCodeAt(index)) % (range + 1);
+  }
+  return minimum + hash;
+}
+
+function usePrefersReducedMotion() {
+  const [prefersReducedMotion, setPrefersReducedMotion] = useState(
+    () => typeof window !== "undefined"
+      && typeof window.matchMedia === "function"
+      && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const mediaQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const updatePreference = () => setPrefersReducedMotion(mediaQuery.matches);
+    updatePreference();
+    mediaQuery.addEventListener("change", updatePreference);
+    return () => mediaQuery.removeEventListener("change", updatePreference);
+  }, []);
+
+  return prefersReducedMotion;
 }

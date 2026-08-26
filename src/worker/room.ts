@@ -34,7 +34,7 @@ import {
   readJsonBody,
   zodIssues,
 } from "./errors";
-import { isGuessCorrect } from "./guessing";
+import { isGuessClose, isGuessCorrect } from "./guessing";
 import { randomPrompt } from "./prompts";
 
 type SqlRecord = Record<string, SqlStorageValue>;
@@ -64,7 +64,9 @@ interface SeatRow extends SqlRecord {
   controller: ControllerType;
   is_host: number;
   is_ready: number;
+  is_connected: number;
   position: number;
+  joined_at: number;
 }
 
 interface RoundRow extends SqlRecord {
@@ -141,7 +143,7 @@ interface CommandExecution {
 }
 
 const SCHEMA_VERSION = 1;
-const RATE_LIMIT_MS = 1_000;
+const RATE_LIMIT_MS = 750;
 const MAX_ACTIVITY = 80;
 const MAX_SOCKET_MESSAGE_BYTES = 2_048;
 
@@ -302,6 +304,8 @@ export class GameRoom extends DurableObject<Env> {
           return await this.getState(request);
         case "POST /internal/commands":
           return await this.executeCommand(request);
+        case "POST /internal/leave":
+          return await this.leaveRoom(request);
         case "GET /internal/prompt":
           return await this.getPrompt(request);
         case "GET /internal/replay":
@@ -413,10 +417,6 @@ export class GameRoom extends DurableObject<Env> {
     const name = cleanPlayerText(data.name);
     const totalRounds = data.mode === "practice" ? 2 : TEAM_ROUND_COUNT;
 
-    const companionToken = data.mode === "practice" ? randomToken() : null;
-    const companionTokenHash = companionToken === null ? null : await hashToken(companionToken);
-    const companionSeatId = data.mode === "practice" ? crypto.randomUUID() : null;
-
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
         `INSERT INTO room(
@@ -437,28 +437,17 @@ export class GameRoom extends DurableObject<Env> {
         seatId,
         tokenHash,
         name,
-        data.mode === "practice" ? "human" : data.controller,
-        data.mode === "practice" ? 1 : 0,
+        data.controller,
+        data.mode === "practice" || data.controller === "agent" ? 1 : 0,
         now,
       );
-      if (companionSeatId !== null && companionTokenHash !== null) {
-        this.ctx.storage.sql.exec(
-          `INSERT INTO seats(
-            id, token_hash, name, team, controller, is_host, is_ready,
-            is_connected, position, joined_at
-          ) VALUES (?, ?, 'Pencil Agent', 'cobalt', 'agent', 0, 1, 0, 1, ?)`,
-          companionSeatId,
-          companionTokenHash,
-          now,
-        );
-      }
       this.insertActivitySync({
         roundIndex: -1,
         kind: "system",
         label: "room_created",
         detail: "The sketchbook is open.",
         seatId,
-        origin: "human-ui",
+        origin: data.controller === "agent" ? "webmcp" : "human-ui",
         canvasVersion: 0,
         now,
       });
@@ -469,9 +458,6 @@ export class GameRoom extends DurableObject<Env> {
       seatId,
       token,
       snapshot: this.publicSnapshot(),
-      ...(companionSeatId === null || companionToken === null
-        ? {}
-        : { companion: { roomCode, seatId: companionSeatId, token: companionToken } }),
     };
     console.log(JSON.stringify({ event: "room_created", roomCode, mode: data.mode }));
     return jsonResponse(response, { status: 201 });
@@ -481,13 +467,6 @@ export class GameRoom extends DurableObject<Env> {
     const initialRoom = this.requireRoom();
     if (initialRoom.phase !== "lobby") {
       throw new ApiError(409, "MATCH_STARTED", "This match has already started.");
-    }
-    if (initialRoom.mode === "practice") {
-      throw new ApiError(
-        409,
-        "PRACTICE_IS_LOCAL",
-        "Practice Pair uses one browser session with paired human and agent seats.",
-      );
     }
     const payload = (await readJsonBody(request, 8_000)) as Partial<InternalJoinPayload>;
     const result = JoinRoomRequestSchema.safeParse(payload.request);
@@ -505,32 +484,42 @@ export class GameRoom extends DurableObject<Env> {
     if (room.phase !== "lobby") {
       throw new ApiError(409, "MATCH_STARTED", "This match has already started.");
     }
-    if (room.mode === "practice") {
-      throw new ApiError(
-        409,
-        "PRACTICE_IS_LOCAL",
-        "Practice Pair uses one browser session with paired human and agent seats.",
-      );
-    }
     const seats = this.seatRows();
-    if (seats.length >= 8) throw new ApiError(409, "ROOM_FULL", "This room already has eight players.");
-    const team = result.data.team ?? balancedTeam(seats);
-    if (seats.filter((seat) => seat.team === team).length >= 4) {
-      throw new ApiError(409, "TEAM_FULL", `Team ${team} already has four players.`);
+    let team: TeamId;
+    if (room.mode === "practice") {
+      if (seats.length >= 2) {
+        throw new ApiError(409, "PRACTICE_FULL", "This Practice Pair already has two players.");
+      }
+      const partner = seats[0];
+      if (partner === undefined || partner.controller === result.data.controller) {
+        throw new ApiError(409, "PRACTICE_PARTNER_REQUIRED", "Practice Pair needs one human and one agent.");
+      }
+      if (result.data.team !== undefined && result.data.team !== "cobalt") {
+        throw new ApiError(409, "PRACTICE_TEAM", "Practice Pair uses the cobalt team.");
+      }
+      team = "cobalt";
+    } else {
+      if (seats.length >= 8) throw new ApiError(409, "ROOM_FULL", "This room already has eight players.");
+      team = result.data.team ?? balancedTeam(seats);
+      if (seats.filter((seat) => seat.team === team).length >= 4) {
+        throw new ApiError(409, "TEAM_FULL", `Team ${team} already has four players.`);
+      }
     }
     const position = seats.length;
+    const ready = room.mode === "practice" || result.data.controller === "agent";
 
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
         `INSERT INTO seats(
           id, token_hash, name, team, controller, is_host, is_ready,
           is_connected, position, joined_at
-        ) VALUES (?, ?, ?, ?, ?, 0, 0, 0, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, 0, ?, 0, ?, ?)`,
         seatId,
         tokenHash,
         name,
         team,
         result.data.controller,
+        ready ? 1 : 0,
         position,
         now,
       );
@@ -541,7 +530,7 @@ export class GameRoom extends DurableObject<Env> {
         label: "player_joined",
         detail: `${name} joined ${team}.`,
         seatId,
-        origin: "human-ui",
+        origin: result.data.controller === "agent" ? "webmcp" : "human-ui",
         canvasVersion: room.canvas_version,
         now,
       });
@@ -636,6 +625,36 @@ export class GameRoom extends DurableObject<Env> {
     return jsonResponse(execution.result);
   }
 
+  private async leaveRoom(request: Request): Promise<Response> {
+    const seat = await this.authorizeRequest(request);
+    const room = this.requireRoom();
+    this.ctx.storage.transactionSync(() => {
+      if (room.phase === "lobby") {
+        this.ctx.storage.sql.exec("DELETE FROM rate_limits WHERE seat_id = ?", seat.id);
+        this.ctx.storage.sql.exec("DELETE FROM seats WHERE id = ?", seat.id);
+        if (seat.is_host === 1) {
+          const successor = this.seatRows().sort((left, right) => left.position - right.position)[0];
+          if (successor !== undefined) {
+            this.ctx.storage.sql.exec("UPDATE seats SET is_host = 1 WHERE id = ?", successor.id);
+          }
+        }
+      } else {
+        this.ctx.storage.sql.exec("UPDATE seats SET is_connected = 0 WHERE id = ?", seat.id);
+      }
+      this.ctx.storage.sql.exec("UPDATE room SET revision = revision + 1 WHERE id = 1");
+    });
+    for (const socket of this.ctx.getWebSockets()) {
+      if (this.socketAttachment(socket)?.seatId !== seat.id) continue;
+      try {
+        socket.close(1000, "Player left");
+      } catch {
+        // The runtime may already own the close handshake.
+      }
+    }
+    await this.broadcastSnapshot();
+    return jsonResponse({ accepted: true });
+  }
+
   private runCommandSync(seat: SeatRow, command: RoomCommand, now: number): CommandExecution {
     switch (command.type) {
       case "ready_up":
@@ -651,7 +670,7 @@ export class GameRoom extends DurableObject<Env> {
       case "submit_guess":
         return this.submitGuessSync(seat, command.guess, command.origin, now);
       case "ready_next":
-        return this.readyNextSync(seat, command.origin, now);
+        return this.readyNextSync(seat, command.expectedRoundIndex, command.origin, now);
     }
   }
 
@@ -692,9 +711,10 @@ export class GameRoom extends DurableObject<Env> {
     }
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
-        "UPDATE seats SET team = ?, controller = ?, is_ready = 0 WHERE id = ?",
+        "UPDATE seats SET team = ?, controller = ?, is_ready = ? WHERE id = ?",
         team,
         controller,
+        controller === "agent" ? 1 : 0,
         seat.id,
       );
       this.ctx.storage.sql.exec("UPDATE room SET revision = revision + 1 WHERE id = 1");
@@ -717,7 +737,7 @@ export class GameRoom extends DurableObject<Env> {
     this.requirePhase(room, "lobby");
     if (seat.is_host !== 1) throw new ApiError(403, "HOST_ONLY", "Only the host can start the match.");
     this.assertControllerOrigin(seat, origin);
-    const seats = this.seatRows();
+    const seats = this.seatRows().filter((candidate) => candidate.is_connected === 1);
     if (room.mode !== "practice") {
       const cobaltCount = seats.filter((candidate) => candidate.team === "cobalt").length;
       const coralCount = seats.filter((candidate) => candidate.team === "coral").length;
@@ -903,7 +923,9 @@ export class GameRoom extends DurableObject<Env> {
     const guess = cleanPlayerText(rawGuess);
     const aliases = parseStringArray(round.aliases_json);
     const correct = isGuessCorrect(guess, round.prompt, aliases);
-    const points = correct ? 100 + Math.floor(Math.max(0, round.ends_at - now) / 1_000) : 0;
+    const close = !correct && isGuessClose(guess, round.prompt, aliases);
+    const guessRemainingMs = Math.max(0, round.ends_at - now);
+    const points = correct ? 100 + Math.floor(guessRemainingMs / 1_000) : 0;
     const nextRevision = room.revision + 1;
 
     this.ctx.storage.transactionSync(() => {
@@ -952,18 +974,25 @@ export class GameRoom extends DurableObject<Env> {
         accepted: true,
         revision: nextRevision,
         canvasVersion: room.canvas_version,
-        remainingMs: correct ? 0 : remainingMs(room, now),
+        remainingMs: guessRemainingMs,
         correct,
+        close,
         pointsAwarded: points,
       },
       alarm: correct ? "delete" : null,
     };
   }
 
-  private readyNextSync(seat: SeatRow, origin: ActionOrigin, now: number): CommandExecution {
+  private readyNextSync(seat: SeatRow, expectedRoundIndex: number, origin: ActionOrigin, now: number): CommandExecution {
     const room = this.requireRoom();
-    this.requirePhase(room, "round-end");
     this.assertControllerOrigin(seat, origin);
+    if (room.round_index !== expectedRoundIndex) {
+      return { result: { ...this.commandResult(), duplicate: true }, alarm: null };
+    }
+    if (room.phase === "drawing" || room.phase === "match-end") {
+      return { result: { ...this.commandResult(), duplicate: true }, alarm: null };
+    }
+    this.requirePhase(room, "round-end");
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("UPDATE seats SET is_ready = 1 WHERE id = ?", seat.id);
       this.ctx.storage.sql.exec("UPDATE room SET revision = revision + 1 WHERE id = 1");
@@ -979,7 +1008,10 @@ export class GameRoom extends DurableObject<Env> {
       });
     });
     const refreshedSeat = this.requireSeat(seat.id);
-    const shouldAdvance = refreshedSeat.is_host === 1 || this.seatRows().every((candidate) => candidate.is_ready === 1);
+    const eligibleSeats = this.seatRows().filter(
+      (candidate) => candidate.is_connected === 1 || candidate.id === refreshedSeat.id,
+    );
+    const shouldAdvance = refreshedSeat.is_host === 1 || eligibleSeats.every((candidate) => candidate.is_ready === 1);
     if (!shouldAdvance) return { result: this.commandResult(), alarm: null };
 
     if (room.round_index + 1 >= room.total_rounds) {
@@ -1006,7 +1038,9 @@ export class GameRoom extends DurableObject<Env> {
   private beginRoundSync(previous: RoomRow, roundIndex: number, now: number): void {
     const seats = this.seatRows();
     const activeTeam: TeamId = previous.mode === "practice" || roundIndex % 2 === 0 ? "cobalt" : "coral";
-    const teamSeats = seats.filter((seat) => seat.team === activeTeam);
+    const teamSeats = seats.filter(
+      (seat) => seat.team === activeTeam && (previous.mode === "practice" || seat.is_connected === 1),
+    );
     if (teamSeats.length === 0) throw new ApiError(409, "NO_ARTIST", "The active team has no artist.");
     const artist =
       previous.mode === "practice"
@@ -1199,10 +1233,27 @@ export class GameRoom extends DurableObject<Env> {
     const [client, server] = pair;
     this.ctx.acceptWebSocket(server);
     server.serializeAttachment({ seatId: seat.id } satisfies SocketAttachment);
+    let practiceStarted = false;
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec("UPDATE seats SET is_connected = 1 WHERE id = ?", seat.id);
-      this.ctx.storage.sql.exec("UPDATE room SET revision = revision + 1 WHERE id = 1");
+      const room = this.requireRoom();
+      const seats = this.seatRows();
+      const practiceReady = room.mode === "practice"
+        && room.phase === "lobby"
+        && seats.length === 2
+        && seats.every((candidate) => candidate.is_connected === 1)
+        && new Set(seats.map((candidate) => candidate.controller)).size === 2;
+      if (practiceReady) {
+        this.beginRoundSync(room, 0, Date.now());
+        practiceStarted = true;
+      } else {
+        this.ctx.storage.sql.exec("UPDATE room SET revision = revision + 1 WHERE id = 1");
+      }
     });
+    if (practiceStarted) {
+      const endsAt = this.requireRoom().ends_at;
+      if (endsAt !== null) await this.ctx.storage.setAlarm(endsAt);
+    }
     const snapshotMessage = JSON.stringify({ type: "snapshot", snapshot: this.publicSnapshot() });
     server.send(snapshotMessage);
     await this.broadcastSnapshot(server);

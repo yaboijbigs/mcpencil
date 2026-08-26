@@ -35,27 +35,32 @@ export function App() {
   const [copied, setCopied] = useState(false);
   const [actionBusy, setActionBusy] = useState(false);
   const [hiddenPracticePrompt, setHiddenPracticePrompt] = useState<string | null>(null);
-
-  const startPracticeForAgent = useCallback(
-    async (name: string) => session.create({ name, mode: "practice", controller: "human" }),
-    [session.create],
-  );
-  const joinForAgent = useCallback(
-    async (input: { roomCode: string; name: string; team?: TeamId; controller: ControllerType }) =>
-      session.join(input.roomCode, { name: input.name, team: input.team, controller: input.controller }),
-    [session.join],
-  );
-
   const primarySeat = session.snapshot?.seats.find(
     (seat) => seat.id === session.credentials?.seatId,
   );
+
+  const startPracticeForAgent = useCallback(
+    async (name: string) => session.create({ name, mode: "practice", controller: "agent" }),
+    [session.create],
+  );
+  const joinForAgent = useCallback(
+    async (input: { roomCode: string; name: string; team?: TeamId; controller: ControllerType }) => {
+      const joiningHostedPractice = session.snapshot?.mode === "practice"
+        && session.snapshot.phase === "lobby"
+        && session.credentials?.roomCode === input.roomCode
+        && primarySeat?.controller === "human";
+      const join = joiningHostedPractice ? session.joinAgent : session.join;
+      await join(input.roomCode, { name: input.name, team: input.team, controller: input.controller });
+    },
+    [primarySeat?.controller, session.credentials?.roomCode, session.join, session.joinAgent, session.snapshot?.mode, session.snapshot?.phase],
+  );
+
   const toolSeatId = session.companion?.seatId
     ?? (primarySeat?.controller === "agent" ? primarySeat.id : null);
   const practicePromptKey = session.snapshot?.mode === "practice"
     && session.snapshot.phase === "drawing"
     && session.snapshot.artistSeatId === session.credentials?.seatId
     && primarySeat?.controller === "human"
-    && session.companion
     ? `${session.snapshot.roomCode}:${session.snapshot.roundIndex}`
     : null;
   const practicePromptGate = practicePromptKey === null
@@ -295,19 +300,20 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, onCopy }: {
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const teams: TeamId[] = ["cobalt", "coral"];
   if (!self) return null;
-  const allReady = snapshot.seats.every((seat) => seat.isReady);
+  const activeSeats = snapshot.seats.filter((seat) => seat.isConnected);
+  const allReady = activeSeats.every((seat) => seat.isReady);
   const enoughPlayers = snapshot.mode === "practice"
-    ? snapshot.seats.length >= 2
-    : teams.every((team) => snapshot.seats.filter((seat) => seat.team === team).length >= 2);
+    ? activeSeats.length >= 2
+    : teams.every((team) => activeSeats.filter((seat) => seat.team === team).length >= 2);
 
   if (snapshot.mode === "practice") {
     return <main className="lobby-page practice-lobby">
-      <section className="lobby-heading"><div><span className="eyebrow">Practice Pair</span><h1>Your pair is ready to sketch.</h1><p>One private prompt, one shared canvas, then the roles reverse.</p></div></section>
+      <section className="lobby-heading"><div><span className="eyebrow">Practice Pair</span><h1>Invite your browser agent.</h1><p>The room starts automatically after a separate agent seat joins through WebMCP.</p></div><button className="invite-card" type="button" onClick={onCopy}><small>Give this room to your agent</small><strong>{snapshot.roomCode}</strong><span><CopyIcon /> Copy link</span></button></section>
       <div className="practice-lobby-grid">
         <section className="practice-duo-card">
           {snapshot.seats.map((seat, index) => <div className="practice-player" key={seat.id}><span className={`avatar ${seat.controller}`}>{seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}</span><div><small>{seat.controller === "agent" ? "BROWSER AGENT" : "HUMAN PLAYER"}</small><strong>{seat.name}{seat.id === seatId ? " (you)" : ""}</strong><span><CheckIcon /> Ready</span></div>{index === 0 ? <b>↔</b> : null}</div>)}
           <div className="practice-explainer"><SparkIcon /><p><strong>Round one:</strong> your agent draws and you guess.<br /><strong>Round two:</strong> you draw and your agent guesses.</p></div>
-          {self.isHost ? <button className="primary-button jumbo" type="button" disabled={busy || !enoughPlayers} onClick={() => void onCommand({ type: "start_match", origin: "human-ui" })}>Start practice <ArrowIcon /></button> : null}
+          <p className="waiting-host"><span className="pulse-dot" />{enoughPlayers ? "Agent joined — opening the first round…" : "Waiting for an agent to call join_match…"}</p>
         </section>
         <aside className="lobby-controls">{lens}</aside>
       </div>
@@ -336,9 +342,9 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, onCopy }: {
           <section className="control-card"><span className="eyebrow">Your seat</span><h3>{self.name}</h3>
             <label>Team</label><div className="segmented"><button type="button" className={self.team === "cobalt" ? "active cobalt" : ""} onClick={() => void onCommand({ type: "configure_seat", team: "cobalt", controller: self.controller })}>Cobalt</button><button type="button" className={self.team === "coral" ? "active coral" : ""} onClick={() => void onCommand({ type: "configure_seat", team: "coral", controller: self.controller })}>Coral</button></div>
             <label>Controller</label><div className="segmented"><button type="button" className={self.controller === "human" ? "active" : ""} onClick={() => void onCommand({ type: "configure_seat", team: self.team, controller: "human" })}><PeopleIcon /> Human</button><button type="button" className={self.controller === "agent" ? "active" : ""} onClick={() => void onCommand({ type: "configure_seat", team: self.team, controller: "agent" })}><BotIcon /> Agent</button></div>
-            {self.controller === "human" ? <button className={`ready-button ${self.isReady ? "is-ready" : ""}`} type="button" disabled={busy} onClick={() => void onCommand({ type: "ready_up", ready: !self.isReady, origin: "human-ui" })}>{self.isReady ? <><CheckIcon /> Ready!</> : "I’m ready"}</button> : <div className="agent-guess-note"><BotIcon /><div><strong>Your agent has <code>ready_up</code>.</strong><span>Ask it to ready this seat through WebMCP.</span></div></div>}
+            {self.controller === "human" ? <button className={`ready-button ${self.isReady ? "is-ready" : ""}`} type="button" disabled={busy} onClick={() => void onCommand({ type: "ready_up", ready: !self.isReady, origin: "human-ui" })}>{self.isReady ? <><CheckIcon /> Ready!</> : "I’m ready"}</button> : <div className="agent-guess-note"><BotIcon /><div><strong>Agent seat is ready.</strong><span>No extra ready-up call required.</span></div></div>}
           </section>
-          {self.isHost ? self.controller === "human" ? <button className="primary-button jumbo" type="button" disabled={busy || !allReady || !enoughPlayers} onClick={() => void onCommand({ type: "start_match", origin: "human-ui" })}>{!enoughPlayers ? "Need 2 players on each team" : !allReady ? `Waiting for ${snapshot.seats.filter((seat) => !seat.isReady).length} player${snapshot.seats.filter((seat) => !seat.isReady).length === 1 ? "" : "s"}…` : <>Start match <ArrowIcon /></>}</button> : <p className="waiting-host"><span className="pulse-dot" />The agent host can start with <code>start_match</code>.</p> : <p className="waiting-host"><span className="pulse-dot" />Waiting for the host to start…</p>}
+          {self.isHost ? self.controller === "human" ? <button className="primary-button jumbo" type="button" disabled={busy || !allReady || !enoughPlayers} onClick={() => void onCommand({ type: "start_match", origin: "human-ui" })}>{!enoughPlayers ? "Need 2 live players on each team" : !allReady ? `Waiting for ${activeSeats.filter((seat) => !seat.isReady).length} player${activeSeats.filter((seat) => !seat.isReady).length === 1 ? "" : "s"}…` : <>Start match <ArrowIcon /></>}</button> : <p className="waiting-host"><span className="pulse-dot" />The agent host can start with <code>start_match</code>.</p> : <p className="waiting-host"><span className="pulse-dot" />Waiting for the host to start…</p>}
           {lens}
         </aside>
       </div>
@@ -465,7 +471,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
       </section>
 
       {snapshot.phase === "round-end" ? (
-        <RoundEnd snapshot={snapshot} humanController={self?.controller === "human"} onNext={() => onCommand({ type: "ready_next", origin: "human-ui" })} busy={busy} lens={lens} />
+        <RoundEnd snapshot={snapshot} humanController={self?.controller === "human"} onNext={() => onCommand({ type: "ready_next", expectedRoundIndex: snapshot.roundIndex, origin: "human-ui" })} busy={busy} lens={lens} />
       ) : (
         <div className="game-layout">
           <section className="play-column">

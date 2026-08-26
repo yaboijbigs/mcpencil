@@ -51,7 +51,7 @@ export default {
         throw new ApiError(503, "ROOM_CODE_EXHAUSTED", "Could not reserve a room code. Please retry.");
       }
 
-      const apiMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/(join|state|commands|prompt|replay)$/);
+      const apiMatch = url.pathname.match(/^\/api\/rooms\/([^/]+)\/(join|leave|state|commands|prompt|replay)$/);
       if (apiMatch !== null) {
         const roomCode = parseRoomCode(apiMatch[1] ?? "");
         const action = apiMatch[2];
@@ -80,6 +80,17 @@ export default {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify(body),
+            }),
+          );
+          return withSecurityHeaders(response, true);
+        }
+
+        if (action === "leave" && request.method === "POST") {
+          const token = bearerOrQueryToken(request, url);
+          const response = await room.fetch(
+            new Request("https://room/internal/leave", {
+              method: "POST",
+              headers: { "X-Seat-Token": token },
             }),
           );
           return withSecurityHeaders(response, true);

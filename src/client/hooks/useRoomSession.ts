@@ -16,12 +16,13 @@ import {
   getReplay,
   getRoomState,
   joinRoom,
+  leaveRoom,
   roomSocket,
   sendRoomCommand,
 } from "../api";
 import type { ReplayPayload } from "../api";
 
-const STORAGE_KEY = "mcpencil.seat.v2";
+const STORAGE_KEY = "mcpencil.seat.v3";
 
 interface StoredSession {
   primary: SeatCredentials;
@@ -30,8 +31,13 @@ interface StoredSession {
 
 function readStoredCredentials(): StoredSession | null {
   try {
-    const parsed = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as StoredSession | null;
+    const parsed = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "null") as StoredSession | null;
     if (!parsed?.primary?.roomCode || !parsed.primary.seatId || !parsed.primary.token) return null;
+    const linkedRoom = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase();
+    if (linkedRoom && linkedRoom !== parsed.primary.roomCode) {
+      sessionStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
     return parsed;
   } catch {
     return null;
@@ -39,8 +45,8 @@ function readStoredCredentials(): StoredSession | null {
 }
 
 function saveCredentials(credentials: StoredSession | null) {
-  if (credentials) localStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
-  else localStorage.removeItem(STORAGE_KEY);
+  if (credentials) sessionStorage.setItem(STORAGE_KEY, JSON.stringify(credentials));
+  else sessionStorage.removeItem(STORAGE_KEY);
 }
 
 export interface RoomSession {
@@ -59,6 +65,10 @@ export interface RoomSession {
     roomCode: string,
     input: { name: string; team?: TeamId; controller: ControllerType },
   ): Promise<void>;
+  joinAgent(
+    roomCode: string,
+    input: { name: string; team?: TeamId; controller: ControllerType },
+  ): Promise<void>;
   command(command: RoomCommand, signal?: AbortSignal): ReturnType<typeof sendRoomCommand>;
   agentCommand(command: RoomCommand, signal?: AbortSignal): ReturnType<typeof sendRoomCommand>;
   privatePrompt(signal?: AbortSignal): Promise<PrivatePrompt>;
@@ -70,6 +80,7 @@ export interface RoomSession {
 }
 
 export function useRoomSession(): RoomSession {
+  const tabIdentity = useRef({ id: crypto.randomUUID(), startedAt: Date.now() });
   const stored = useRef(readStoredCredentials());
   const [credentials, setCredentials] = useState<SeatCredentials | null>(() => stored.current?.primary ?? null);
   const [companion, setCompanion] = useState<SeatCredentials | null>(() => stored.current?.companion ?? null);
@@ -79,6 +90,14 @@ export function useRoomSession(): RoomSession {
   const [error, setError] = useState<string | null>(null);
   const credentialsRef = useRef(credentials);
   credentialsRef.current = credentials;
+  const canvasVersionRef = useRef(0);
+  const versionRoomRef = useRef<string | null>(null);
+  if (snapshot?.roomCode !== versionRoomRef.current) {
+    versionRoomRef.current = snapshot?.roomCode ?? null;
+    canvasVersionRef.current = snapshot?.canvasVersion ?? 0;
+  } else {
+    canvasVersionRef.current = Math.max(canvasVersionRef.current, snapshot?.canvasVersion ?? 0);
+  }
 
   const adopt = useCallback((response: JoinRoomResponse) => {
     const next = {
@@ -86,10 +105,9 @@ export function useRoomSession(): RoomSession {
       seatId: response.seatId,
       token: response.token,
     };
-    const nextCompanion = response.companion ?? null;
-    saveCredentials({ primary: next, ...(nextCompanion ? { companion: nextCompanion } : {}) });
+    saveCredentials({ primary: next });
     setCredentials(next);
-    setCompanion(nextCompanion);
+    setCompanion(null);
     setSnapshot(response.snapshot);
     setError(null);
   }, []);
@@ -100,14 +118,6 @@ export function useRoomSession(): RoomSession {
       try {
         const response = await createRoom(input);
         adopt(response);
-        if (input.mode === "practice") {
-          try {
-            await sendRoomCommand(response.roomCode, response.token, { type: "start_match", origin: "human-ui" });
-            setSnapshot(await getRoomState(response.roomCode, response.token));
-          } catch {
-            // Keep the paired lobby usable if automatic start cannot complete.
-          }
-        }
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not open a room.");
         throw reason;
@@ -133,12 +143,48 @@ export function useRoomSession(): RoomSession {
     [adopt],
   );
 
+  const joinAgent = useCallback<RoomSession["joinAgent"]>(
+    async (roomCode, input) => {
+      const primary = credentialsRef.current;
+      if (!primary || primary.roomCode !== roomCode.trim().toUpperCase()) {
+        throw new ApiError("Open the matching Practice Pair first.", "practice_host_missing", 409);
+      }
+      setLoading(true);
+      try {
+        const response = await joinRoom(roomCode.trim().toUpperCase(), input);
+        const nextCompanion = {
+          roomCode: response.roomCode,
+          seatId: response.seatId,
+          token: response.token,
+        };
+        saveCredentials({ primary, companion: nextCompanion });
+        setCompanion(nextCompanion);
+        setSnapshot(response.snapshot);
+        setError(null);
+      } catch (reason) {
+        setError(reason instanceof Error ? reason.message : "Could not join the agent to practice.");
+        throw reason;
+      } finally {
+        setLoading(false);
+      }
+    },
+    [],
+  );
+
   const refresh = useCallback(
     async (signal?: AbortSignal) => {
       const current = credentialsRef.current;
       if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
       const next = await getRoomState(current.roomCode, current.token, signal);
-      setSnapshot(next);
+      const active = credentialsRef.current;
+      if (!active || active.roomCode !== current.roomCode || active.token !== current.token) return next;
+      setSnapshot((currentSnapshot) =>
+        !currentSnapshot
+        || currentSnapshot.roomCode !== next.roomCode
+        || next.revision >= currentSnapshot.revision
+          ? next
+          : currentSnapshot,
+      );
       return next;
     },
     [],
@@ -149,8 +195,12 @@ export function useRoomSession(): RoomSession {
       const current = credentialsRef.current;
       if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
       try {
-        const result = await sendRoomCommand(current.roomCode, current.token, roomCommand, signal);
-        await refresh(signal).catch(() => undefined);
+        const outgoing = withLatestCanvasVersion(roomCommand, canvasVersionRef.current);
+        const result = await sendRoomCommand(current.roomCode, current.token, outgoing, signal);
+        canvasVersionRef.current = Math.max(canvasVersionRef.current, result.canvasVersion);
+        // The authoritative WebSocket snapshot follows the acknowledgement. Do not make
+        // agents wait on a redundant state round-trip before their tool call can return.
+        void refresh().catch(() => undefined);
         return result;
       } catch (reason) {
         if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -172,8 +222,10 @@ export function useRoomSession(): RoomSession {
     const current = companion ?? credentialsRef.current;
     if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
     try {
-      const result = await sendRoomCommand(current.roomCode, current.token, roomCommand, signal);
-      await refresh(signal).catch(() => undefined);
+      const outgoing = withLatestCanvasVersion(roomCommand, canvasVersionRef.current);
+      const result = await sendRoomCommand(current.roomCode, current.token, outgoing, signal);
+      canvasVersionRef.current = Math.max(canvasVersionRef.current, result.canvasVersion);
+      void refresh().catch(() => undefined);
       return result;
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -196,13 +248,59 @@ export function useRoomSession(): RoomSession {
   }, []);
 
   const leave = useCallback(() => {
+    const seats = [companion, credentialsRef.current].filter(
+      (seat): seat is SeatCredentials => seat !== null,
+    );
+    for (const seat of seats) void leaveRoom(seat.roomCode, seat.token).catch(() => undefined);
     saveCredentials(null);
     setCredentials(null);
     setCompanion(null);
     setSnapshot(null);
     setConnected(false);
     setError(null);
+  }, [companion]);
+
+  const dropCopiedSession = useCallback(() => {
+    saveCredentials(null);
+    setCredentials(null);
+    setCompanion(null);
+    setSnapshot(null);
+    setConnected(false);
+    setError("That seat is already active in another tab. Join this tab as a new player.");
   }, []);
+
+  useEffect(() => {
+    if (!credentials || typeof BroadcastChannel === "undefined") return;
+    const channel = new BroadcastChannel("mcpencil-seat-claims-v1");
+    const identity = tabIdentity.current;
+    const seatIds = [credentials.seatId, companion?.seatId].filter((id): id is string => Boolean(id));
+    const priority = `${String(identity.startedAt).padStart(16, "0")}:${identity.id}`;
+    channel.addEventListener("message", (event: MessageEvent<unknown>) => {
+      if (typeof event.data !== "object" || event.data === null) return;
+      const message = event.data as {
+        type?: unknown;
+        tabId?: unknown;
+        priority?: unknown;
+        seatIds?: unknown;
+        targetTabId?: unknown;
+      };
+      if (message.type === "probe"
+        && typeof message.tabId === "string"
+        && typeof message.priority === "string"
+        && Array.isArray(message.seatIds)
+        && message.seatIds.some((id) => typeof id === "string" && seatIds.includes(id))) {
+        if (priority < message.priority) {
+          channel.postMessage({ type: "occupied", targetTabId: message.tabId });
+        }
+        return;
+      }
+      if (message.type === "occupied" && message.targetTabId === identity.id) {
+        dropCopiedSession();
+      }
+    });
+    channel.postMessage({ type: "probe", tabId: identity.id, priority, seatIds });
+    return () => channel.close();
+  }, [companion?.seatId, credentials?.seatId, dropCopiedSession]);
 
   useEffect(() => {
     if (!credentials) {
@@ -266,6 +364,7 @@ export function useRoomSession(): RoomSession {
     error,
     create,
     join,
+    joinAgent,
     command,
     agentCommand,
     privatePrompt,
@@ -275,4 +374,9 @@ export function useRoomSession(): RoomSession {
     leave,
     dismissError: () => setError(null),
   };
+}
+
+function withLatestCanvasVersion(command: RoomCommand, canvasVersion: number): RoomCommand {
+  if (command.type !== "draw_batch" && command.type !== "undo_draw_batch") return command;
+  return { ...command, expectedVersion: Math.max(command.expectedVersion, canvasVersion) };
 }

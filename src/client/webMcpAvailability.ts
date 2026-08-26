@@ -10,8 +10,10 @@ export function webMcpToolNames(
 
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
   const hasAgentSeat = seat?.controller === "agent";
-  if (snapshot.phase === "lobby" && hasAgentSeat) {
-    names.push("ready_up");
+  if (snapshot.phase === "lobby" && snapshot.mode === "practice" && !hasAgentSeat) {
+    names.push("join_match");
+  }
+  if (snapshot.phase === "lobby" && snapshot.mode !== "practice" && hasAgentSeat) {
     if (seat.isHost) names.push("start_match");
   }
   if (hasAgentSeat && isArtist(snapshot, seatId)) {

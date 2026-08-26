@@ -44,10 +44,11 @@ async function joinRoom(
   roomCode: string,
   name: string,
   team?: "cobalt" | "coral",
+  controller: "human" | "agent" = "human",
 ): Promise<JoinRoomResponse> {
   const response = await request(`/api/rooms/${roomCode}/join`, {
     method: "POST",
-    body: JSON.stringify({ name, ...(team === undefined ? {} : { team }), controller: "human" }),
+    body: JSON.stringify({ name, ...(team === undefined ? {} : { team }), controller }),
   });
   expect(response.status).toBe(201);
   return body<JoinRoomResponse>(response);
@@ -69,6 +70,24 @@ async function state(credentials: SeatCredentials): Promise<RoomSnapshot> {
   });
   expect(response.status).toBe(200);
   return body<RoomSnapshot>(response);
+}
+
+async function connectSeat(credentials: SeatCredentials): Promise<WebSocket> {
+  const response = await request(
+    `/ws/${credentials.roomCode}?token=${encodeURIComponent(credentials.token)}`,
+    { headers: { Upgrade: "websocket" } },
+  );
+  expect(response.status).toBe(101);
+  expect(response.webSocket).not.toBeNull();
+  const socket = response.webSocket!;
+  socket.accept();
+  return socket;
+}
+
+async function connectPractice(human: SeatCredentials, agent: SeatCredentials): Promise<[WebSocket, WebSocket]> {
+  const humanSocket = await connectSeat(human);
+  const agentSocket = await connectSeat(agent);
+  return [humanSocket, agentSocket];
 }
 
 async function prompt(credentials: SeatCredentials): Promise<Response> {
@@ -99,23 +118,25 @@ function assertPromptAbsent(value: unknown, secret?: string): void {
 describe("Practice Pair HTTP journey", () => {
   it("keeps two identities separate and completes both WebMCP directions", async () => {
     const human = await createRoom("practice", "Human Artist");
-    const agent = human.companion;
-    expect(agent).toBeDefined();
-    if (agent === undefined) throw new Error("Practice response omitted its agent companion.");
+    expect(human.snapshot).toMatchObject({ phase: "lobby", totalRounds: 2 });
+    expect(human.snapshot.seats).toHaveLength(1);
+    const agent = await joinRoom(human.roomCode, "Browser Agent", "cobalt", "agent");
 
     expect(agent.seatId).not.toBe(human.seatId);
     expect(agent.token).not.toBe(human.token);
     expect(agent.roomCode).toBe(human.roomCode);
-    expect(human.snapshot.seats).toEqual(
+    expect(agent.snapshot.seats).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: human.seatId, controller: "human" }),
         expect.objectContaining({ id: agent.seatId, controller: "agent" }),
       ]),
     );
+    expect(agent.snapshot).toMatchObject({ phase: "lobby", endsAt: null });
     assertPromptAbsent(human.snapshot);
+    await connectSeat(human);
+    expect(await state(human)).toMatchObject({ phase: "lobby", endsAt: null });
+    await connectSeat(agent);
 
-    const start = await command(human, { type: "start_match", origin: "human-ui" });
-    expect(start.status).toBe(200);
     const firstState = await state(human);
     expect(firstState).toMatchObject({
       mode: "practice",
@@ -198,6 +219,7 @@ describe("Practice Pair HTTP journey", () => {
     expect(firstGuessResult.correct).toBe(true);
     expect(firstGuessResult.pointsAwarded).toBeGreaterThanOrEqual(100);
     expect(firstGuessResult.pointsAwarded).toBeLessThanOrEqual(190);
+    expect(firstGuessResult.remainingMs).toBeGreaterThan(0);
 
     const firstResult = await state(human);
     expect(firstResult.phase).toBe("round-end");
@@ -210,7 +232,7 @@ describe("Practice Pair HTTP journey", () => {
     expect(firstResult.analytics.byOrigin.webmcp).toBe(1);
     expect(firstResult.analytics.byOrigin["human-ui"]).toBe(1);
 
-    const next = await command(human, { type: "ready_next", origin: "human-ui" });
+    const next = await command(human, { type: "ready_next", expectedRoundIndex: 0, origin: "human-ui" });
     expect(next.status).toBe(200);
     const secondState = await state(agent);
     expect(secondState).toMatchObject({
@@ -218,6 +240,10 @@ describe("Practice Pair HTTP journey", () => {
       roundIndex: 1,
       artistSeatId: human.seatId,
     });
+
+    const lateReady = await command(agent, { type: "ready_next", expectedRoundIndex: 0, origin: "webmcp" });
+    expect(lateReady.status).toBe(200);
+    expect(await body<CommandResult>(lateReady)).toMatchObject({ accepted: true, duplicate: true });
 
     const deniedAgentPrompt = await prompt(agent);
     expect(deniedAgentPrompt.status).toBe(403);
@@ -244,7 +270,16 @@ describe("Practice Pair HTTP journey", () => {
     expect(secondGuess.status).toBe(200);
     expect(await body<CommandResult>(secondGuess)).toMatchObject({ correct: true });
 
-    const finish = await command(human, { type: "ready_next", origin: "human-ui" });
+    const staleRoundReady = await command(agent, {
+      type: "ready_next",
+      expectedRoundIndex: 0,
+      origin: "webmcp",
+    });
+    expect(staleRoundReady.status).toBe(200);
+    expect(await body<CommandResult>(staleRoundReady)).toMatchObject({ duplicate: true });
+    expect(await state(human)).toMatchObject({ phase: "round-end", roundIndex: 1 });
+
+    const finish = await command(human, { type: "ready_next", expectedRoundIndex: 1, origin: "human-ui" });
     expect(finish.status).toBe(200);
     const finalState = await state(human);
     expect(finalState.phase).toBe("match-end");
@@ -265,9 +300,8 @@ describe("Practice Pair HTTP journey", () => {
 describe("Durable room authority", () => {
   it("persists hashed identity and room state across isolate teardown", async () => {
     const human = await createRoom("practice", "Eviction Test");
-    expect(human.companion).toBeDefined();
-    const start = await command(human, { type: "start_match", origin: "human-ui" });
-    expect(start.status).toBe(200);
+    const agent = await joinRoom(human.roomCode, "Eviction Agent", "cobalt", "agent");
+    await connectPractice(human, agent);
     const before = await state(human);
 
     const stub = env.ROOMS.getByName(human.roomCode);
@@ -305,7 +339,8 @@ describe("Durable room authority", () => {
 
   it("finalizes an expired round through the Durable Object alarm", async () => {
     const human = await createRoom("practice", "Alarm Test");
-    expect((await command(human, { type: "start_match", origin: "human-ui" })).status).toBe(200);
+    const agent = await joinRoom(human.roomCode, "Alarm Agent", "cobalt", "agent");
+    await connectPractice(human, agent);
     const stub = env.ROOMS.getByName(human.roomCode);
     await runInDurableObject(stub, async (_instance, durableState) => {
       const expiredAt = Date.now() - 1;
@@ -325,10 +360,8 @@ describe("Durable room authority", () => {
 
   it("expires immediately before command execution and rejects a late mutation", async () => {
     const human = await createRoom("practice", "Deadline Test");
-    const agent = human.companion;
-    expect(agent).toBeDefined();
-    if (agent === undefined) throw new Error("Practice response omitted its agent companion.");
-    expect((await command(human, { type: "start_match", origin: "human-ui" })).status).toBe(200);
+    const agent = await joinRoom(human.roomCode, "Deadline Agent", "cobalt", "agent");
+    await connectPractice(human, agent);
 
     const stub = env.ROOMS.getByName(human.roomCode);
     await runInDurableObject(stub, async (_instance, durableState) => {
@@ -358,6 +391,7 @@ describe("Durable room authority", () => {
     const cobaltMate = await joinRoom(host.roomCode, "Cobalt Mate");
     const coralTwo = await joinRoom(host.roomCode, "Coral Two");
     const players = [host, coralOne, cobaltMate, coralTwo];
+    await Promise.all(players.map(connectSeat));
 
     const spoofedReady = await command(host, {
       type: "ready_up",
@@ -414,6 +448,44 @@ describe("Durable room authority", () => {
     expect(ended.phase).toBe("round-end");
     expect(ended.scores.cobalt).toBeGreaterThanOrEqual(100);
     expect(ended.scores.coral).toBe(0);
+  });
+
+  it("auto-readies agent joins and ignores disconnected unready lobby ghosts", async () => {
+    const host = await createRoom("arena", "Fast Host");
+    const coralAgent = await joinRoom(host.roomCode, "Coral Agent", "coral", "agent");
+    const cobaltMate = await joinRoom(host.roomCode, "Cobalt Mate", "cobalt");
+    const coralMate = await joinRoom(host.roomCode, "Coral Mate", "coral");
+    await joinRoom(host.roomCode, "Abandoned Agent", "cobalt", "agent");
+    await Promise.all([host, coralAgent, cobaltMate, coralMate].map(connectSeat));
+
+    const joined = await state(host);
+    expect(joined.seats.find((seat) => seat.id === coralAgent.seatId)).toMatchObject({
+      controller: "agent",
+      isReady: true,
+    });
+
+    for (const player of [host, cobaltMate, coralMate]) {
+      expect((await command(player, { type: "ready_up", ready: true, origin: "human-ui" })).status).toBe(200);
+    }
+
+    const start = await command(host, { type: "start_match", origin: "human-ui" });
+    expect(start.status).toBe(200);
+    expect(await state(host)).toMatchObject({ phase: "drawing", artistSeatId: host.seatId });
+  });
+
+  it("removes lobby seats on explicit leave and transfers hosting", async () => {
+    const host = await createRoom("arena", "Leaving Host");
+    const successor = await joinRoom(host.roomCode, "New Host", "coral");
+    const response = await request(`/api/rooms/${host.roomCode}/leave`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${host.token}` },
+    });
+    expect(response.status).toBe(200);
+    expect(await body<{ accepted: true }>(response)).toEqual({ accepted: true });
+    const snapshot = await state(successor);
+    expect(snapshot.seats).toEqual([
+      expect.objectContaining({ id: successor.seatId, isHost: true }),
+    ]);
   });
 
   it("serializes concurrent joins without overfilling teams or duplicating positions", async () => {

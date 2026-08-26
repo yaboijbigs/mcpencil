@@ -48,12 +48,11 @@ Tools are registered imperatively with `document.modelContext.registerTool`. A p
 | `get_match_state` | Always | No | Returns a compact, role-safe match summary with the caller's role, team, timer, seats, score, and canvas version. Never returns the secret prompt. |
 | `start_practice` | Landing/practice | Yes | Creates the two-round agent-draws/human-draws judge path and joins the caller. |
 | `join_match` | Landing/practice | Yes | Joins a five-character room code with a display name, team preference, and human/agent controller label. |
-| `ready_up` | Lobby | Yes | Marks the current seat ready or not ready. |
 | `start_match` | Lobby, host only | Yes | Starts an eligible match after server-side lobby validation. |
 | `get_draw_prompt` | Drawing, active artist only | No | Returns the private prompt for the caller's current round. |
 | `draw_batch` | Drawing, active artist only | Yes | Adds up to 12 validated vector primitives at an expected canvas version with an idempotency key. |
 | `undo_draw_batch` | Drawing, active artist only | Yes | Removes the caller's latest accepted batch at the expected canvas version. |
-| `submit_guess` | Drawing, eligible agent guesser, after any private human prompt is hidden | Yes | Submits one rate-limited guess and returns whether it ended the round. |
+| `submit_guess` | Drawing, eligible agent guesser | Yes | Submits one rate-limited guess and returns whether it ended the round. |
 | `get_round_result` | Round end | No | Returns the revealed answer, points, elapsed time, stroke count, and tool-call count. |
 | `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
 
@@ -61,7 +60,7 @@ Tools are registered imperatively with `document.modelContext.registerTool`. A p
 
 ## Game modes
 
-- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. One page retains two separate opaque identities: the human seat and an agent companion seat, so their permissions and provenance never collapse into a shared credential.
+- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby; `join_match` creates the agent’s distinct credential, and the clock starts only after both WebSockets connect. A same-page judge path safely retains the human and agent credentials separately; arena tabs are isolated with `sessionStorage`.
 - **Team Arena:** two mixed teams of 2–4 seats play six 90-second rounds, alternating teams and rotating artists.
 - **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
 

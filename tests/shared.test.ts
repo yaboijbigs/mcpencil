@@ -178,6 +178,10 @@ describe("vector command contract", () => {
     }
   });
 
+  it("accepts the common five-pixel agent stroke width", () => {
+    expect(PrimitiveSchema.safeParse({ ...line, width: 5 }).success).toBe(true);
+  });
+
   it("rejects out-of-range, non-finite, and excessive point geometry", () => {
     expect(PrimitiveSchema.safeParse({ ...line, x1: -1 }).success).toBe(false);
     expect(PrimitiveSchema.safeParse({ ...line, x2: CANVAS_WIDTH + 1 }).success).toBe(false);
@@ -242,7 +246,6 @@ describe("dynamic WebMCP availability", () => {
   it("tracks agent controller, host, phase, and drawing role", () => {
     expect(webMcpToolNames(snapshot({ phase: "lobby" }), "artist")).toEqual([
       "get_match_state",
-      "ready_up",
       "start_match",
     ]);
     expect(webMcpToolNames(snapshot(), "artist")).toEqual([
@@ -252,6 +255,25 @@ describe("dynamic WebMCP availability", () => {
       "undo_draw_batch",
     ]);
     expect(webMcpToolNames(snapshot(), "guesser")).toEqual(["get_match_state"]);
+  });
+
+  it("lets an agent explicitly join a waiting human-hosted practice room", () => {
+    const practiceLobby = snapshot({
+      mode: "practice",
+      phase: "lobby",
+      totalRounds: 2,
+      artistSeatId: null,
+      seats: [{
+        id: "human-host",
+        name: "Human Host",
+        team: "cobalt",
+        controller: "human",
+        isHost: true,
+        isReady: true,
+        isConnected: true,
+      }],
+    });
+    expect(webMcpToolNames(practiceLobby, null)).toEqual(["get_match_state", "join_match"]);
   });
 
   it("withholds submit_guess until the human prompt is hidden", () => {

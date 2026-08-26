@@ -10,7 +10,7 @@ export const TEAM_IDS = ["cobalt", "coral"] as const;
 export const CONTROLLER_TYPES = ["human", "agent"] as const;
 export const ORIGINS = ["human-ui", "webmcp"] as const;
 export const PALETTE = ["ink", "cobalt", "coral", "sun", "leaf", "paper"] as const;
-export const STROKE_WIDTHS = [3, 7, 12, 20] as const;
+export const STROKE_WIDTHS = [3, 5, 7, 12, 20] as const;
 
 export type TeamId = (typeof TEAM_IDS)[number];
 export type ControllerType = (typeof CONTROLLER_TYPES)[number];
@@ -25,6 +25,7 @@ const Radius = z.number().finite().min(1).max(1000);
 const PaletteSchema = z.enum(PALETTE);
 const StrokeWidthSchema = z.union([
   z.literal(3),
+  z.literal(5),
   z.literal(7),
   z.literal(12),
   z.literal(20),
@@ -240,6 +241,7 @@ const SubmitGuessCommandSchema = z.object({
 
 const ReadyNextCommandSchema = z.object({
   type: z.literal("ready_next"),
+  expectedRoundIndex: z.number().int().min(0),
   origin: OriginSchema,
 }).strict();
 
@@ -267,8 +269,6 @@ export interface SeatCredentials {
 }
 
 export interface JoinRoomResponse extends SeatCredentials {
-  /** Present in Practice Pair so one page can retain separate human and agent identities. */
-  companion?: SeatCredentials;
   snapshot: RoomSnapshot;
 }
 
@@ -279,6 +279,7 @@ export interface CommandResult {
   remainingMs: number | null;
   batchId?: string;
   correct?: boolean;
+  close?: boolean;
   pointsAwarded?: number;
   duplicate?: boolean;
 }

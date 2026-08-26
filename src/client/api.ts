@@ -90,6 +90,13 @@ export function joinRoom(
   });
 }
 
+export function leaveRoom(roomCode: string, token: string): Promise<{ accepted: true }> {
+  return request<{ accepted: true }>(`/api/rooms/${encodeURIComponent(roomCode)}/leave`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
 export function getRoomState(roomCode: string, token: string, signal?: AbortSignal) {
   return request<RoomSnapshot>(
     `/api/rooms/${encodeURIComponent(roomCode)}/state`,

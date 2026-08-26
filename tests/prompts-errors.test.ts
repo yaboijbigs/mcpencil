@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { isGuessCorrect } from "../src/worker/guessing";
 import { PROMPT_DECK, randomPrompt } from "../src/worker/prompts";
 import {
   ApiError,
@@ -28,6 +29,26 @@ describe("original prompt deck", () => {
       expect(knownPrompts.has(randomPrompt("campfire").prompt)).toBe(true);
       expect(randomPrompt("campfire").prompt).not.toBe("campfire");
     }
+  });
+
+  it("accepts fair variants for specific compound prompts", () => {
+    const card = (prompt: string) => PROMPT_DECK.find((candidate) => candidate.prompt === prompt)!;
+
+    const cactus = card("cactus wearing a hat");
+    expect(isGuessCorrect("cactus wearing a hat", cactus.prompt, cactus.aliases)).toBe(true);
+    expect(isGuessCorrect("a cactus wearing a cowboy hat", cactus.prompt, cactus.aliases)).toBe(true);
+
+    const dragon = card("tiny dragon");
+    expect(isGuessCorrect("dragon", dragon.prompt, dragon.aliases)).toBe(true);
+
+    const robot = card("robot watering a plant");
+    expect(isGuessCorrect("robot watering the plant", robot.prompt, robot.aliases)).toBe(true);
+    expect(isGuessCorrect("watering plant robot", robot.prompt, robot.aliases)).toBe(true);
+    expect(isGuessCorrect("gardening robot", robot.prompt, robot.aliases)).toBe(true);
+
+    const octopus = card("octopus playing drums");
+    expect(isGuessCorrect("an octopus playing the drums", octopus.prompt, octopus.aliases)).toBe(true);
+    expect(isGuessCorrect("drum-playing octopus", octopus.prompt, octopus.aliases)).toBe(true);
   });
 });
 
