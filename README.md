@@ -1,0 +1,181 @@
+# MCPencil
+
+**Bring your own agent to game night.**
+
+MCPencil is a realtime draw-and-guess party game where humans and browser agents are first-class players. An agent can receive a private prompt and draw with constrained vector tools while people guess; then the roles reverse and the agent inspects a human drawing and submits its answer. The same room engine supports human-agent pairs, mixed teams, humans versus agents, and agent-versus-agent exhibitions.
+
+- **Play:** [https://mcpencil.com](https://mcpencil.com)
+- **Temporary Workers preview:** `https://mcpencil.<account-subdomain>.workers.dev` *(replace after the first deployment; the custom domain above is canonical)*
+- **Demo video:** `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL` *(recording scheduled before submission)*
+- **License:** [MIT](LICENSE)
+
+> MCPencil is an original human-agent draw-and-guess game. It is not affiliated with any commercial drawing-game brand.
+
+## The 60-second judge path
+
+1. Open [mcpencil.com](https://mcpencil.com) in ChatGPT's in-app browser with **GPT-5.6 Sol or Terra** and choose **Practice Pair**.
+2. Ask: **“Join this practice and play both rounds with me. Use only the tools the page gives you.”**
+3. In round one, watch the WebMCP Lens: artist-only tools appear, the private prompt stays masked, and the agent calls `draw_batch`. Guess the picture in the game UI.
+4. In round two, memorize the private prompt and click **hide prompt & draw**. Only after the card is unmounted does the agent receive `submit_guess`; draw while it visually inspects the canvas.
+5. Open the result and replay panels. Compare human/WebMCP provenance, time-to-guess, strokes, and tool calls.
+
+The entire path demonstrates both WebMCP directions without an app-owned bot, model API key, bot OAuth flow, or DOM automation.
+
+## Why WebMCP is essential
+
+MCPencil exposes a game protocol, not a pile of clickable UI. Tool availability changes with the authenticated seat, match phase, team, and role. An agent draws through the same typed command bus as a human and can only communicate with bounded low-level geometry—there is no semantic “draw a cat” tool and no image-generation escape hatch. When roles reverse, the canvas remains visual; the agent must understand what the human drew and use the page's guess tool.
+
+Every accepted mutation follows one path:
+
+```text
+human UI or WebMCP tool
+  → shared Zod schema
+  → room/seat authorization
+  → SQLite commit in one room Durable Object
+  → versioned WebSocket broadcast
+  → local render acknowledgement
+```
+
+The collapsible **WebMCP Lens** makes this visible to judges: registered tools, role-driven tool changes, invocation timing, safe input summaries, compact results, canvas versions, and action provenance. Private prompts are represented only by masked events.
+
+## WebMCP tool contract
+
+Tools are registered imperatively with `document.modelContext.registerTool`. A phase-scoped `AbortController` removes obsolete registrations as roles change. Because removing a registration does not terminate an invocation already executing, handlers also use execution signals, generation guards, and server-side role/phase checks to make in-flight work safe. Read tools use `readOnlyHint`; results containing player-authored names or guesses use `untrustedContentHint`.
+
+| Tool | Available when | Mutates | What it does |
+|---|---|---:|---|
+| `get_match_state` | Always | No | Returns a compact, role-safe match summary with the caller's role, team, timer, seats, score, and canvas version. Never returns the secret prompt. |
+| `start_practice` | Landing/practice | Yes | Creates the two-round agent-draws/human-draws judge path and joins the caller. |
+| `join_match` | Landing/practice | Yes | Joins a five-character room code with a display name, team preference, and human/agent controller label. |
+| `ready_up` | Lobby | Yes | Marks the current seat ready or not ready. |
+| `start_match` | Lobby, host only | Yes | Starts an eligible match after server-side lobby validation. |
+| `get_draw_prompt` | Drawing, active artist only | No | Returns the private prompt for the caller's current round. |
+| `draw_batch` | Drawing, active artist only | Yes | Adds up to 12 validated vector primitives at an expected canvas version with an idempotency key. |
+| `undo_draw_batch` | Drawing, active artist only | Yes | Removes the caller's latest accepted batch at the expected canvas version. |
+| `submit_guess` | Drawing, eligible agent guesser, after any private human prompt is hidden | Yes | Submits one rate-limited guess and returns whether it ended the round. |
+| `get_round_result` | Round end | No | Returns the revealed answer, points, elapsed time, stroke count, and tool-call count. |
+| `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
+
+`draw_batch` accepts only `line`, `polyline`, `ellipse`, `rectangle`, `arc`, and `polygon` primitives on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are all enforced. Text, URLs, uploads, arbitrary SVG/path strings, and out-of-range geometry are rejected.
+
+## Game modes
+
+- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. One page retains two separate opaque identities: the human seat and an agent companion seat, so their permissions and provenance never collapse into a shared credential.
+- **Team Arena:** two mixed teams of 2–4 seats play six 90-second rounds, alternating teams and rotating artists.
+- **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
+
+Only the active artist's teammates may guess. A correct answer awards `100 + remaining whole seconds`; wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers.
+
+## Architecture
+
+```mermaid
+flowchart LR
+    A[Human UI] --> B[Typed command bus]
+    M[Browser agent via WebMCP] --> B
+    B --> W[Cloudflare Worker router]
+    W -->|getByName room code| D[GameRoom Durable Object]
+    D --> S[(SQLite room state + event log)]
+    D --> T[Durable Object alarm]
+    D -->|hibernatable WebSockets| C1[Player browser]
+    D -->|versioned broadcasts| C2[Spectator browser]
+    C1 --> L[SVG canvas + WebMCP Lens]
+    C2 --> L2[SVG canvas + replay]
+```
+
+The React/TypeScript single-page app keeps tools attached to one document. One deterministically addressed, SQLite-backed Durable Object owns each room. The room persists state before broadcasting, uses hibernatable WebSockets for realtime updates and reconnect catch-up, and schedules a single alarm to finalize a round even if every client disconnects. See [Architecture](docs/ARCHITECTURE.md) for protocols and invariants.
+
+## Browser and model setup
+
+### Recommended challenge setup
+
+1. Open the latest ChatGPT desktop app.
+2. Select **GPT-5.6 Sol** or **GPT-5.6 Terra**. Luna does not expose website tools for this flow.
+3. Open [mcpencil.com](https://mcpencil.com) in the in-app browser and allow the page's site tools when prompted.
+4. Keep the page visible while the agent draws or guesses so the canvas and Lens can be inspected.
+
+### Chromium development setup
+
+Use **Chrome 149 or newer** with the experimental WebMCP feature enabled, then connect through a compatible browser agent. Without WebMCP, MCPencil still works as a realtime human multiplayer game and shows an unsupported-browser explanation; agent controls remain unavailable.
+
+WebMCP is experimental. Exact browser UI and flag labels may change between prerelease builds, so the ChatGPT desktop path above is the submission's supported judge path.
+
+## Local development
+
+Prerequisites: Node.js 24+, npm, and a Cloudflare account for deployment. No OpenAI API key or hosted model credential is used.
+
+```bash
+npm ci
+npm run types
+npm run dev
+```
+
+`npm run dev` starts the Vite UI for frontend work. To exercise Worker routes, Durable Objects, WebSockets, and alarms locally:
+
+```bash
+npm run dev:worker
+```
+
+Useful checks:
+
+```bash
+npm run typecheck
+npm test
+npm run build
+npm run check
+```
+
+The test suite uses Cloudflare's `@cloudflare/vitest-plugin` so Worker and Durable Object tests execute in `workerd` with real local bindings. The manual release matrix is in [Playtesting](docs/PLAYTEST.md).
+
+## Deploy to Cloudflare
+
+The checked-in `wrangler.jsonc` defines the static asset binding, `GameRoom` SQLite Durable Object migration, observability, `nodejs_compat`, `mcpencil.com`, and `www.mcpencil.com` custom-domain routes.
+
+```bash
+npx wrangler login
+npm run check
+npm run deploy
+```
+
+After deployment, verify DNS/custom-domain activation in the same Cloudflare account, replace the Workers preview placeholder at the top of this README, and run the release checklist in [Playtesting](docs/PLAYTEST.md). No secrets belong in `wrangler.jsonc`; future secrets must use `wrangler secret put`.
+
+## Security and integrity
+
+- A private artist prompt is returned only to the authenticated active artist. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guess` remains unregistered until the human explicitly hides and unmounts the prompt card.
+- Anonymous seat credentials use opaque random tokens; only token hashes are persisted.
+- Names and guesses are length-limited data, never HTML or instructions.
+- Every mutation is authorized against room phase, seat, role, team, expiry, expected canvas version, and rate limits.
+- Duplicate drawing idempotency keys are harmless; expired-round writes and stale versions are rejected.
+- Responses set CSP, `Origin-Agent-Cluster: ?1`, and `Permissions-Policy: tools=(self)`; tools are not exposed cross-origin.
+- Disconnects do not pause timers. Reconnecting players recover the canonical snapshot and events after their last canvas version.
+
+See the [Threat model](docs/THREAT_MODEL.md) for assets, trust boundaries, abuse cases, and release checks.
+
+## Tests and evaluation
+
+Automated coverage targets:
+
+- strict vector schemas, geometry bounds, payload limits, and rejected unknown fields;
+- room isolation, SQLite persistence after eviction, alarm expiry, WebSocket reconnect, and version catch-up;
+- lobby constraints, artist rotation, scoring, idempotency, normalization, typo tolerance, and rate limiting;
+- proof that private prompts never enter a shared response, event, replay record, or log object;
+- parity between human UI and WebMCP commands;
+- exact role/controller/gate-driven tool availability, plus cleanup, in-flight generation safety, and result annotations.
+
+The release evaluation uses 12 original golden cards. The target is at least 8/12 agent drawings guessed by humans, at least 8/12 human drawings guessed by the browser agent, and zero WebMCP tool-contract failures. Record results in [Playtesting](docs/PLAYTEST.md).
+
+## Known limitations
+
+- WebMCP currently requires a compatible experimental browser/agent environment; ordinary browsers cannot occupy an agent seat.
+- MCPencil deliberately has no built-in LLM fallback. The participating browser agent supplies the intelligence.
+- Anonymous room identity is device-local; clearing site storage loses the reconnect token.
+- Rooms are designed for small party sessions (up to eight active seats), not massive spectator broadcasts.
+
+## Challenge-period provenance
+
+This repository was created from an empty directory on **August 25, 2026**, after the WebMCP Challenge began. All implementation, original prompts, artwork, audio, documentation, and commit history are being produced during the challenge period. The project will remain publicly accessible throughout judging.
+
+## Attribution
+
+MCPencil's product design, prompt deck, icons, vector art, and programmatic sound effects are original. It is built with [React](https://react.dev/), [Vite](https://vite.dev/), [Zod](https://zod.dev/), [Cloudflare Workers and Durable Objects](https://developers.cloudflare.com/durable-objects/), and the experimental [WebMCP imperative API](https://developer.chrome.com/docs/ai/webmcp/imperative-api). No uploaded art, proprietary game content, or generated answer images are included.
+
+Released under the [MIT License](LICENSE).

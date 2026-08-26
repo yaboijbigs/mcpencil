@@ -1,0 +1,180 @@
+# MCPencil architecture
+
+## Design goal
+
+MCPencil treats a human pointer and a browser agent's WebMCP call as two controllers for one authoritative multiplayer protocol. The browser never decides who may draw, whether a guess is correct, or when a round ends. It renders the latest version accepted by the room authority.
+
+```mermaid
+flowchart TB
+    subgraph Browser[Single-page browser client]
+      UI[Human controls]
+      MCP[Role-scoped WebMCP tools]
+      BUS[Typed client command bus]
+      SVG[1000 × 700 SVG renderer]
+      LENS[WebMCP Lens]
+      UI --> BUS
+      MCP --> BUS
+      BUS --> SVG
+      MCP --> LENS
+      UI --> LENS
+    end
+
+    subgraph Edge[Cloudflare edge]
+      ROUTER[Worker HTTP and upgrade router]
+      DO[GameRoom Durable Object]
+      SQL[(SQLite storage)]
+      ALARM[Round alarm]
+      ROUTER -->|ROOMS.getByName code| DO
+      DO --> SQL
+      DO --> ALARM
+    end
+
+    BUS -->|validated command envelope| ROUTER
+    DO -->|versioned hibernatable WebSocket event| Browser
+```
+
+## Coordination atom
+
+One `GameRoom` Durable Object owns one five-character room code. The Worker derives the stub with `ROOMS.getByName(roomCode)`, which provides deterministic routing and serializes concurrent room mutations. Separate rooms do not share a global coordinator.
+
+The Durable Object uses SQLite-backed storage. Its constructor initializes schema only; request work is not wrapped in `blockConcurrencyWhile`. Critical mutations are committed before the in-memory snapshot is changed or a broadcast is sent. A reconstructed instance can recover the room from storage after eviction or deployment.
+
+One Durable Object alarm represents the current round deadline. Starting or advancing a round replaces that alarm. The alarm rechecks the persisted round identity and deadline before finalizing, so a delayed or superseded alarm cannot end the wrong round.
+
+## State machine
+
+```mermaid
+stateDiagram-v2
+    [*] --> Lobby: create room
+    Lobby --> Drawing: host starts eligible match
+    Drawing --> RoundEnd: correct guess
+    Drawing --> RoundEnd: deadline alarm
+    RoundEnd --> Drawing: next round ready
+    RoundEnd --> MatchEnd: final round
+    MatchEnd --> [*]
+```
+
+Server invariants:
+
+- `lobby`: no prompt is accessible; only readiness, seat configuration, and host start are mutable.
+- `drawing`: exactly one artist and one active team exist; `endsAt` is persisted; only the artist may draw; only active-team non-artists may guess.
+- `round-end`: drawing and guessing are immutable; the answer may be revealed in a round result; eligible players may ready for the next round.
+- `match-end`: scores, analytics, and replay are immutable.
+
+Practice Pair uses the same phases and command schemas with a two-round schedule. Team Arena and Exhibition use six rounds and classic artist rotation.
+
+## Command lifecycle
+
+Every mutation is a `CommandEnvelope` containing an opaque seat token and a discriminated command. The shared schema rejects unknown keys and invalid payloads at the edge of the trust boundary.
+
+```mermaid
+sequenceDiagram
+    participant C as UI or WebMCP
+    participant W as Worker
+    participant R as GameRoom
+    participant Q as SQLite
+    participant P as Room peers
+
+    C->>W: command(token, payload)
+    W->>R: deterministic room RPC/fetch
+    R->>R: validate token, role, phase, time, rate, version
+    R->>Q: atomic persistent mutation
+    Q-->>R: committed
+    R-->>P: versioned WebSocket snapshot/event
+    R-->>C: compact acknowledgement
+    C->>C: await acknowledged local version
+```
+
+The command carries an explicit `origin` for drawable and guess actions: `human-ui` or `webmcp`. Origin is analytics/provenance data, never authorization. Both origins hit the identical server handler.
+
+## Canonical vector model
+
+The drawing protocol bounds normalized numeric coordinates to `0..1000`, while the visual SVG view box is `1000 × 700`. Tool descriptions and human pointer mapping target the visible `y=0..700` region; SVG clipping keeps any still-bounded off-canvas geometry invisible. Rendering scales the same canonical geometry uniformly to desktop, phone, and video layouts.
+
+Allowed primitives:
+
+- line;
+- polyline (2–48 points);
+- ellipse;
+- rectangle with optional corner radius;
+- circular arc;
+- polygon (3–24 points).
+
+Each primitive uses an enumerated palette and stroke width, with an optional enumerated fill. A `draw_batch` contains 1–12 primitives and an idempotency key. Arbitrary SVG paths, markup, text, URLs, images, filters, event attributes, and external references never enter the renderer.
+
+The persisted canvas event stream is canonical. Live rendering, reconnect catch-up, replay, stroke counts, and analytics derive from those events rather than independent client state. Undo removes or tombstones an entire last batch so partial agent calls cannot leave ambiguous state.
+
+## Realtime and reconnects
+
+The room accepts WebSockets through the Durable Object hibernation API. Connection attachment data identifies the already-authenticated seat without persisting its raw token. The room can survive idle periods without billing for a continuously live isolate.
+
+Broadcasts carry monotonically increasing room revisions and canvas versions. Clients ignore older data. After a disconnect, a client authenticates again, reports the last applied version, and receives either missing events or a canonical snapshot. Timers continue while no clients are connected.
+
+## Dynamic WebMCP lifecycle
+
+The app uses the imperative `document.modelContext.registerTool` API. Tool registration is derived from the current role-safe snapshot and caller seat.
+
+```mermaid
+flowchart LR
+    SNAP[Snapshot or seat change] --> ABORT[Retire previous tool registrations]
+    ABORT --> CALC[Calculate legal tools + generation]
+    CALC --> REG[Register tool set]
+    REG --> CALL[Tool invocation]
+    CALL --> BUS[Shared command bus]
+    BUS --> ACK[Wait for accepted local version]
+    ACK --> RESULT[Compact tool result + Lens entry]
+```
+
+Changing role, phase, room, or seat aborts the prior registration scope. Chrome does not terminate an invocation merely because its tool registration was removed, so handlers also forward the invocation's own execution signal, compare a captured generation before accepting local results, and rely on current server-side role, phase, round-expiry, and canvas-version authorization. `get_match_state` is always role-safe. `get_draw_prompt` is registered only for the active artist, and the Worker independently enforces that authorization.
+
+Practice Pair is one authoritative two-seat session on one page. Creation returns one opaque human credential plus a distinct opaque agent-companion credential. Human controls always send the human token with `human-ui` origin; WebMCP tools always send the companion token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them.
+
+Tool outputs are concise and structured. Player-created names and guesses are labeled untrusted content. Tool descriptions explain when a call is appropriate but do not echo user-authored content into instructions.
+
+## Prompt secrecy
+
+The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a drawing phase it may leave the room only through the private prompt route/tool after token, seat, round, phase, and artist checks. In Practice round two, the human artist reveal occupies a private UI subtree while the agent's `submit_guess` registration is withheld. The human must explicitly memorize and hide the card; React unmounts the answer before the guess tool is registered.
+
+The following surfaces are explicitly prompt-free until round end:
+
+- shared HTTP state;
+- WebSocket snapshots and presence events;
+- canvas events;
+- guess events;
+- activity/Lens details;
+- replay records;
+- structured application logs;
+- error strings and tool acknowledgements.
+
+At round end, the revealed answer is stored only in the round result intended for all players.
+
+## Hosting and headers
+
+Cloudflare Workers serves the built Vite assets and routes `/api/*` and `/ws/*` through the Worker first. Production uses `https://mcpencil.com` and `https://www.mcpencil.com`, with the generated `workers.dev` hostname retained as a diagnostic fallback.
+
+Security headers include:
+
+- `Content-Security-Policy` with no inline script or cross-origin embedding needs;
+- `Permissions-Policy: tools=(self)`;
+- `Origin-Agent-Cluster: ?1`;
+- `X-Content-Type-Options: nosniff`;
+- a restrictive referrer policy and frame policy.
+
+No model key, OpenAI API credential, or bot credential exists in the application. The browser agent that visits the site supplies the intelligence.
+
+## Source map
+
+| Area | Responsibility |
+|---|---|
+| `src/shared` | Zod contracts, shared game types, canvas constants, formatting helpers |
+| `src/client` | React UI, SVG interaction/rendering, API/WebSocket client, WebMCP registration and Lens |
+| `src/worker` | Worker router, room authority, prompt deck, normalization, persistence, alarms, WebSockets |
+| `tests` | Workerd schema/utility tests and Worker/Durable Object integration coverage |
+| `docs` | Submission, architecture, threat model, demo, and playtest evidence |
+
+## Operational checks
+
+- `npm run types` regenerates bindings from `wrangler.jsonc`.
+- `npm run check` runs type checking, Workerd tests, and the production build.
+- Cloudflare observability records structured operational fields but not prompts, raw tokens, or private input.
+- The release deployment is smoke-tested through both custom-domain hostnames and the Workers preview URL.
