@@ -25,6 +25,7 @@ import { currentHumanPromptKey, humanPromptGate } from "./humanPromptGate";
 import { playAnotherMatch } from "./playAgain";
 import { getModeDefinition } from "./modes";
 import { CanvasBoard } from "./components/CanvasBoard";
+import { FlipbookShell } from "./components/FlipbookShell";
 import { LandingExperience } from "./components/LandingExperience";
 import { LobbyExperience } from "./components/LobbyExperience";
 import {
@@ -43,6 +44,7 @@ import { WebMcpLens } from "./components/WebMcpLens";
 import { useGameSound } from "./hooks/useGameSound";
 import { useRoomSession } from "./hooks/useRoomSession";
 import { useWebMcpTools } from "./hooks/useWebMcpTools";
+import { describeFlipbookView } from "./flipbook";
 
 export function App() {
   const session = useRoomSession();
@@ -50,16 +52,9 @@ export function App() {
   const [copiedInvite, setCopiedInvite] = useState<InviteAudience | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [hiddenHumanPrompt, setHiddenHumanPrompt] = useState<string | null>(null);
-  const viewKey = session.snapshot
-    ? `${session.snapshot.roomCode}:${session.snapshot.phase}:${session.snapshot.roundIndex}`
-    : "landing";
   const primarySeat = session.snapshot?.seats.find(
     (seat) => seat.id === session.credentials?.seatId,
   );
-
-  useEffect(() => {
-    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
-  }, [viewKey]);
 
   const startPracticeForAgent = useCallback(
     async (name: string) => session.create({ name, mode: "practice", controller: "agent" }),
@@ -84,6 +79,16 @@ export function App() {
     primarySeat?.controller ?? null,
   );
   const activeHumanPromptGate = humanPromptGate(activeHumanPromptKey, hiddenHumanPrompt);
+  const flipbookView = describeFlipbookView(
+    session.snapshot,
+    activeHumanPromptGate,
+    isAgentInviteUrl(new URL(window.location.href)),
+  );
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [flipbookView.key]);
+
   const leaveToLanding = useCallback(
     () => playAnotherMatch(session.leave, (url) => window.location.assign(url)),
     [session.leave],
@@ -138,41 +143,43 @@ export function App() {
         onLeave={leaveToLanding}
       />
 
-      {!session.snapshot || !session.credentials ? (
-        <LandingExperience
-          busy={session.loading}
-          onCreate={(input) => session.create(input)}
-          onJoin={async (code, input) => { await session.join(code, input); }}
-          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={[]} />}
-        />
-      ) : session.snapshot.phase === "lobby" ? (
-        <LobbyExperience
-          snapshot={session.snapshot}
-          seatId={session.credentials.seatId}
-          busy={actionBusy}
-          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
-          onCommand={(command) => act(() => session.command(command))}
-          copiedInvite={copiedInvite}
-          onCopyInvite={(audience) => void copyInvite(audience)}
-        />
-      ) : (
-        <GameRoom
-          snapshot={session.snapshot}
-          seatId={session.credentials.seatId}
-          companionSeatId={session.companion?.seatId ?? null}
-          busy={actionBusy}
-          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
-          onCommand={(command) => act(() => session.command(command))}
-          onPrompt={session.privatePrompt}
-          onReplay={session.replay}
-          onPlayAgain={leaveToLanding}
-          privatePromptGate={activeHumanPromptGate}
-          onHidePrivatePrompt={() => {
-            if (activeHumanPromptKey !== null) setHiddenHumanPrompt(activeHumanPromptKey);
-          }}
-          playSound={sound.play}
-        />
-      )}
+      <FlipbookShell view={flipbookView}>
+        {!session.snapshot || !session.credentials ? (
+          <LandingExperience
+            busy={session.loading}
+            onCreate={(input) => session.create(input)}
+            onJoin={async (code, input) => { await session.join(code, input); }}
+            lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={[]} />}
+          />
+        ) : session.snapshot.phase === "lobby" ? (
+          <LobbyExperience
+            snapshot={session.snapshot}
+            seatId={session.credentials.seatId}
+            busy={actionBusy}
+            lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
+            onCommand={(command) => act(() => session.command(command))}
+            copiedInvite={copiedInvite}
+            onCopyInvite={(audience) => void copyInvite(audience)}
+          />
+        ) : (
+          <GameRoom
+            snapshot={session.snapshot}
+            seatId={session.credentials.seatId}
+            companionSeatId={session.companion?.seatId ?? null}
+            busy={actionBusy}
+            lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
+            onCommand={(command) => act(() => session.command(command))}
+            onPrompt={session.privatePrompt}
+            onReplay={session.replay}
+            onPlayAgain={leaveToLanding}
+            privatePromptGate={activeHumanPromptGate}
+            onHidePrivatePrompt={() => {
+              if (activeHumanPromptKey !== null) setHiddenHumanPrompt(activeHumanPromptKey);
+            }}
+            playSound={sound.play}
+          />
+        )}
+      </FlipbookShell>
 
       {session.error ? (
         <div className="toast error-toast" role="alert">
