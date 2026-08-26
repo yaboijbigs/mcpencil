@@ -18,8 +18,9 @@ export function webMcpToolNames(
   if (snapshot.phase === "lobby" && !hasAgentSeat) {
     names.push("play_mcpencil");
   }
-  if (snapshot.phase === "lobby" && snapshot.mode !== "practice" && hasAgentSeat) {
-    if (seat.isHost) names.push("start_match");
+  if (snapshot.phase === "lobby" && hasAgentSeat && seat.isHost) {
+    names.push("configure_match");
+    if (snapshot.mode !== "practice") names.push("start_match");
   }
   if (hasAgentSeat && isArtist(snapshot, seatId)) {
     names.push("draw_stroke", "undo_last_stroke");
@@ -65,19 +66,62 @@ export function compactWebMcpState(
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
   const role = isArtist(snapshot, seatId) ? "artist" : canGuess(snapshot, seatId) ? "guesser" : "spectator";
   const action = compactNextAction(snapshot, seatId);
+  const competitive = snapshot.mode !== "practice";
+  const completedRounds = snapshot.phase === "lobby"
+    ? 0
+    : snapshot.phase === "match-end" || snapshot.phase === "round-end"
+      ? snapshot.roundIndex + 1
+      : snapshot.roundIndex;
+  const seats = snapshot.seats.map(({ id, name, team, controller, isReady, isConnected }) => ({
+    id,
+    name,
+    ...(competitive ? { team } : {}),
+    controller,
+    isReady,
+    isConnected,
+  }));
+  const outcome = snapshot.phase !== "match-end"
+    ? null
+    : competitive
+      ? {
+          kind: "team_result" as const,
+          competitive: true,
+          winner: snapshot.scores.cobalt === snapshot.scores.coral
+            ? "tie"
+            : snapshot.scores.cobalt > snapshot.scores.coral ? "cobalt" : "coral",
+          scores: snapshot.scores,
+        }
+      : {
+          kind: "practice_complete" as const,
+          competitive: false,
+          winner: null,
+          roundsPlayed: snapshot.totalRounds,
+          solvedRounds: snapshot.analytics.correctGuesses,
+          instruction: "Practice Pair is collaborative. Report the completed rounds and prompts; do not declare a team winner or final team score.",
+        };
   const baseState = {
     intent: PLAY_INTENT,
     mustContinue: snapshot.phase !== "match-end",
     completionCondition: COMPLETION_CONDITION,
+    competitive,
     roomCode: snapshot.roomCode, mode: snapshot.mode, phase: snapshot.phase, round: snapshot.roundIndex + 1,
     totalRounds: snapshot.totalRounds, revision: snapshot.revision, yourSeatId: seatId,
     yourRole: role,
-    yourTeam: seat?.team, activeTeam: snapshot.activeTeam,
+    matchSettings: { totalRounds: snapshot.totalRounds, roundDurationMs: snapshot.roundDurationMs },
+    ...(competitive
+      ? { yourTeam: seat?.team, activeTeam: snapshot.activeTeam, scores: snapshot.scores }
+      : {
+          practiceProgress: {
+            completedRounds,
+            solvedRounds: snapshot.analytics.correctGuesses,
+          },
+        }),
+    outcome,
     artist: snapshot.seats.find((candidate) => candidate.id === snapshot.artistSeatId)?.name ?? null,
     remainingMs: snapshot.endsAt ? Math.max(0, snapshot.endsAt - Date.now()) : null,
-    canvasVersion: snapshot.canvasVersion, strokeCount: snapshot.canvas.length, scores: snapshot.scores,
+    canvasVersion: snapshot.canvasVersion, strokeCount: snapshot.canvas.length,
     nextAction: action.nextAction, urgency: action.urgency, deadline: snapshot.endsAt,
-    seats: snapshot.seats.map(({ id, name, team, controller, isReady, isConnected }) => ({ id, name, team, controller, isReady, isConnected })),
+    seats,
   };
   if (seat?.controller !== "agent" || role !== "guesser") return baseState;
   const roundCanvas = snapshot.canvas.filter((event) => event.roundIndex === snapshot.roundIndex);
@@ -106,7 +150,9 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
       nextAction: {
         tool: null,
         arguments: {},
-        instruction: "The match has ended. The play request is complete; report the outcome to the user.",
+        instruction: snapshot.mode === "practice"
+          ? "Practice Pair is complete. Report the collaborative rounds and prompts; do not name a winning team or final team score."
+          : "The team match has ended. Report the winning team and final score to the user.",
       },
       urgency: "complete",
     };
@@ -180,6 +226,26 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
       instruction: "Call with afterRevision equal to this revision and waitMs 25000 so the next role change wakes immediately.",
     },
     urgency: "wait",
+  };
+}
+
+export function compactWebMcpRoundResult(snapshot: RoomSnapshot) {
+  const result = snapshot.roundResult;
+  if (result === null) return null;
+  if (snapshot.mode !== "practice") return result;
+  return {
+    round: result.roundIndex + 1,
+    prompt: result.prompt,
+    outcome: result.guessedBySeatId === undefined ? "timed_out" : "solved",
+    artist: snapshot.seats.find((seat) => seat.id === result.artistSeatId)?.name ?? result.artistSeatId,
+    guessedBy: result.guessedBySeatId === undefined
+      ? null
+      : snapshot.seats.find((seat) => seat.id === result.guessedBySeatId)?.name ?? result.guessedBySeatId,
+    elapsedMs: result.elapsedMs,
+    strokeCount: result.strokeCount,
+    toolCallCount: result.toolCallCount,
+    competitive: false,
+    instruction: "This was a collaborative Practice Pair round; do not describe its team or points as a competitive score.",
   };
 }
 

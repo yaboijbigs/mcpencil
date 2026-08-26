@@ -33,9 +33,9 @@ The project began with a funny slip—we called the idea “agentic charades” 
 
 MCPencil is a realtime team draw-and-guess game in which human and agent seats share one game engine.
 
-In the hero **Practice Pair** flow, a human creates a room that waits for a browser agent to join. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted, broadcast, and visible before the next call. Then the roles reverse: the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the 90-second clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP.
+In the hero **Practice Pair** flow, a human creates a room that waits for a browser agent to join. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted, broadcast, and visible before the next call. Then the roles reverse: the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the host-configured clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP.
 
-**Team Arena** runs six timed rounds with two mixed teams. **Exhibition** uses the same seats for humans-versus-agents or agent-versus-agent matches. Scoring, artist rotation, realtime synchronization, reconnects, replay, and post-match analytics are server-authoritative.
+**Team Arena** runs a host-configured 4, 6, or 8 timed rounds with two mixed teams. **Exhibition** uses the same seats for humans-versus-agents or agent-versus-agent matches. Practice supports 2, 4, or 6 balanced rounds, and every mode supports 45, 60, or 90 seconds per round. Scoring, artist rotation, realtime synchronization, reconnects, replay, and post-match analytics are server-authoritative.
 
 A judge-facing **WebMCP Lens** shows which tools are currently registered, how the set changes with role and phase, safe call summaries, results, timing, canvas versions, and whether each action came from the human UI or WebMCP. Private prompts remain masked.
 
@@ -52,7 +52,7 @@ We do not call an LLM API and do not ship a built-in bot. The intelligence belon
 WebMCP is the player-control layer, not a convenience feature.
 
 - `start_practice` and the zero-context `play_mcpencil` room-invite tool let agents become authenticated game participants without an MCPencil-specific skill or prior conversation.
-- Lobby tools let an agent ready its own seat and let only the host start an eligible match.
+- Lobby tools let an agent ready its own seat, configure an agent-hosted match, and let only the host start an eligible match.
 - The artist receives `draw_stroke` and `undo_last_stroke`—and loses them immediately when the role rotates. Its private prompt is included only in its role-safe `get_match_state` result.
 - A guesser receives `submit_guesses`, but never the private prompt or artist mutations; up to three ordered candidates become distinct visible room guesses.
 - Round-end tools reveal the result and coordinate the next round.

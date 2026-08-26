@@ -12,7 +12,11 @@ import type {
   SeatCredentials,
   VectorPrimitive,
 } from "../src/shared/game";
-import { ROUND_RESULT_MAX_MS, ROUND_RESULT_MIN_MS } from "../src/shared/game";
+import {
+  ROUND_DURATION_MS,
+  ROUND_RESULT_MAX_MS,
+  ROUND_RESULT_MIN_MS,
+} from "../src/shared/game";
 
 const BASE_URL = "https://mcpencil.com";
 
@@ -136,7 +140,11 @@ function assertPromptAbsent(value: unknown, secret?: string): void {
 describe("Practice Pair HTTP journey", () => {
   it("keeps two identities separate and completes both WebMCP directions", async () => {
     const human = await createRoom("practice", "Human Artist");
-    expect(human.snapshot).toMatchObject({ phase: "lobby", totalRounds: 2 });
+    expect(human.snapshot).toMatchObject({
+      phase: "lobby",
+      totalRounds: 2,
+      roundDurationMs: ROUND_DURATION_MS,
+    });
     expect(human.snapshot.seats).toHaveLength(1);
     const agent = await joinRoom(human.roomCode, "Browser Agent", "cobalt", "agent");
 
@@ -373,6 +381,234 @@ describe("Practice Pair HTTP journey", () => {
 });
 
 describe("Durable room authority", () => {
+  it("defaults settings by mode and lets only the lobby host configure valid options", async () => {
+    const agentHostResponse = await request("/api/rooms", {
+      method: "POST",
+      body: JSON.stringify({ name: "Agent Settings Host", mode: "practice", controller: "agent" }),
+    });
+    expect(agentHostResponse.status).toBe(201);
+    const agentHost = await body<JoinRoomResponse>(agentHostResponse);
+    expect((await command(agentHost, {
+      type: "configure_match",
+      totalRounds: 6,
+      roundDurationMs: 60_000,
+      origin: "webmcp",
+    })).status).toBe(200);
+    expect(await state(agentHost)).toMatchObject({
+      totalRounds: 6,
+      roundDurationMs: 60_000,
+    });
+
+    const practice = await createRoom("practice", "Practice Settings Host");
+    expect(practice.snapshot).toMatchObject({
+      totalRounds: 2,
+      roundDurationMs: 90_000,
+    });
+    const exhibition = await createRoom("exhibition", "Exhibition Settings Host");
+    expect(exhibition.snapshot).toMatchObject({
+      totalRounds: 6,
+      roundDurationMs: 90_000,
+    });
+    expect((await command(exhibition, {
+      type: "configure_match",
+      totalRounds: 4,
+      roundDurationMs: 60_000,
+      origin: "human-ui",
+    })).status).toBe(200);
+    expect(await state(exhibition)).toMatchObject({
+      totalRounds: 4,
+      roundDurationMs: 60_000,
+    });
+
+    const host = await createRoom("arena", "Settings Host");
+    const teammate = await joinRoom(host.roomCode, "Settings Teammate", "cobalt");
+    const agent = await joinRoom(host.roomCode, "Settings Agent", "coral", "agent");
+    expect(host.snapshot).toMatchObject({
+      totalRounds: 6,
+      roundDurationMs: 90_000,
+    });
+
+    expect((await command(host, {
+      type: "ready_up",
+      ready: true,
+      origin: "human-ui",
+    })).status).toBe(200);
+    expect((await command(teammate, {
+      type: "ready_up",
+      ready: true,
+      origin: "human-ui",
+    })).status).toBe(200);
+
+    const nonHost = await command(teammate, {
+      type: "configure_match",
+      totalRounds: 8,
+      roundDurationMs: 45_000,
+      origin: "human-ui",
+    });
+    expect(nonHost.status).toBe(403);
+    expect(await body<ApiFailure>(nonHost)).toMatchObject({ code: "HOST_ONLY" });
+
+    const invalidRounds = await command(host, {
+      type: "configure_match",
+      totalRounds: 2,
+      roundDurationMs: 45_000,
+      origin: "human-ui",
+    });
+    expect(invalidRounds.status).toBe(400);
+    expect(await body<ApiFailure>(invalidRounds)).toMatchObject({ code: "INVALID_MATCH_SETTINGS" });
+
+    const invalidDuration = await request(`/api/rooms/${host.roomCode}/commands`, {
+      method: "POST",
+      body: JSON.stringify({
+        token: host.token,
+        command: {
+          type: "configure_match",
+          totalRounds: 8,
+          roundDurationMs: 30_000,
+          origin: "human-ui",
+        },
+      }),
+    });
+    expect(invalidDuration.status).toBe(400);
+    expect(await body<ApiFailure>(invalidDuration)).toMatchObject({ code: "INVALID_COMMAND" });
+
+    const wrongOrigin = await command(host, {
+      type: "configure_match",
+      totalRounds: 8,
+      roundDurationMs: 45_000,
+      origin: "webmcp",
+    });
+    expect(wrongOrigin.status).toBe(403);
+    expect(await body<ApiFailure>(wrongOrigin)).toMatchObject({ code: "ORIGIN_MISMATCH" });
+
+    const beforeRevision = (await state(host)).revision;
+    const configured = await command(host, {
+      type: "configure_match",
+      totalRounds: 8,
+      roundDurationMs: 45_000,
+      origin: "human-ui",
+    });
+    expect(configured.status).toBe(200);
+    expect(await body<CommandResult>(configured)).toMatchObject({
+      accepted: true,
+      revision: beforeRevision + 1,
+    });
+
+    const snapshot = await state(host);
+    expect(snapshot).toMatchObject({
+      totalRounds: 8,
+      roundDurationMs: 45_000,
+    });
+    expect(snapshot.seats.find((seat) => seat.id === host.seatId)?.isReady).toBe(false);
+    expect(snapshot.seats.find((seat) => seat.id === teammate.seatId)?.isReady).toBe(false);
+    expect(snapshot.seats.find((seat) => seat.id === agent.seatId)?.isReady).toBe(true);
+    expect(snapshot.activity.at(-1)).toMatchObject({
+      label: "match_configured",
+      origin: "human-ui",
+    });
+
+    await abortAllDurableObjects();
+    expect(await state(host)).toMatchObject({
+      totalRounds: 8,
+      roundDurationMs: 45_000,
+    });
+  });
+
+  it("accepts Practice Pair options, uses the configured clock, and rejects changes after start", async () => {
+    const human = await createRoom("practice", "Clock Host");
+    const configure = await command(human, {
+      type: "configure_match",
+      totalRounds: 4,
+      roundDurationMs: 45_000,
+      origin: "human-ui",
+    });
+    expect(configure.status).toBe(200);
+    expect(await state(human)).toMatchObject({ totalRounds: 4, roundDurationMs: 45_000 });
+
+    const invalidPracticeRounds = await command(human, {
+      type: "configure_match",
+      totalRounds: 8,
+      roundDurationMs: 60_000,
+      origin: "human-ui",
+    });
+    expect(invalidPracticeRounds.status).toBe(400);
+    expect(await body<ApiFailure>(invalidPracticeRounds)).toMatchObject({
+      code: "INVALID_MATCH_SETTINGS",
+    });
+
+    const agent = await joinRoom(human.roomCode, "Clock Agent", "cobalt", "agent");
+    await connectPractice(human, agent);
+    const started = await state(agent);
+    expect(started).toMatchObject({
+      phase: "round-prep",
+      totalRounds: 4,
+      roundDurationMs: 45_000,
+    });
+
+    const draw = await command(agent, {
+      type: "draw_batch",
+      expectedVersion: started.canvasVersion,
+      idempotencyKey: "configured-duration-opening-stroke",
+      primitives: [oneLine],
+      origin: "webmcp",
+    });
+    expect(draw.status).toBe(200);
+    const drawing = await state(human);
+    expect(drawing.phase).toBe("drawing");
+
+    const stub = env.ROOMS.getByName(human.roomCode);
+    await runInDurableObject(stub, async (_instance, durableState) => {
+      const round = durableState.storage.sql
+        .exec<{ started_at: number; ends_at: number }>(
+          "SELECT started_at, ends_at FROM rounds WHERE round_index = 0",
+        )
+        .one();
+      expect(round.ends_at - round.started_at).toBe(45_000);
+    });
+
+    const wrongPhase = await command(human, {
+      type: "configure_match",
+      totalRounds: 6,
+      roundDurationMs: 90_000,
+      origin: "human-ui",
+    });
+    expect(wrongPhase.status).toBe(409);
+    expect(await body<ApiFailure>(wrongPhase)).toMatchObject({ code: "WRONG_PHASE" });
+  });
+
+  it("migrates an existing v1 room to the persisted v2 duration column", async () => {
+    const host = await createRoom("arena", "Migration Host");
+    const stub = env.ROOMS.getByName(host.roomCode);
+    await runInDurableObject(stub, async (_instance, durableState) => {
+      durableState.storage.sql.exec("ALTER TABLE room DROP COLUMN round_duration_ms");
+      durableState.storage.sql.exec("DELETE FROM schema_migrations WHERE version = 2");
+      const versions = durableState.storage.sql
+        .exec<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")
+        .toArray()
+        .map((row) => row.version);
+      expect(versions).toEqual([1]);
+    });
+
+    await abortAllDurableObjects();
+    expect(await state(host)).toMatchObject({
+      totalRounds: 6,
+      roundDurationMs: 90_000,
+    });
+    const recoveredStub = env.ROOMS.getByName(host.roomCode);
+    await runInDurableObject(recoveredStub, async (_instance, durableState) => {
+      const columns = durableState.storage.sql
+        .exec<{ name: string }>("PRAGMA table_info(room)")
+        .toArray()
+        .map((row) => row.name);
+      expect(columns).toContain("round_duration_ms");
+      const versions = durableState.storage.sql
+        .exec<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")
+        .toArray()
+        .map((row) => row.version);
+      expect(versions).toEqual([1, 2]);
+    });
+  });
+
   it("persists hashed identity and room state across isolate teardown", async () => {
     const human = await createRoom("practice", "Eviction Test");
     const agent = await joinRoom(human.roomCode, "Eviction Agent", "cobalt", "agent");

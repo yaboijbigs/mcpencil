@@ -43,6 +43,9 @@ Use a clean browser profile and the production domain.
 - [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
 - [ ] Human creates Practice Pair, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent calls `play_mcpencil` and connects with a separate opaque identity.
+- [ ] Host changes to rounds and time per round appear for every connected player and survive a reload.
+- [ ] Non-host players can see the synchronized settings but cannot change them through either the UI or WebMCP.
+- [ ] Changing settings resets connected human ready states while agent seats remain auto-ready.
 - [ ] Round one assigns the companion agent as artist and the human as guesser.
 - [ ] Only agent-artist tools are registered; the prompt event is masked in the Lens.
 - [ ] Three or more `draw_stroke` calls each persist, broadcast, render, and acknowledge separately; no multi-stroke burst appears.
@@ -61,7 +64,7 @@ Run at least five rehearsals. Target four clean first-attempt completions; the f
 | Scenario | Clients | Expected result | Pass |
 |---|---:|---|---|
 | Two humans, same team | 2 | Artist stroke appears remotely; teammate can guess; nonartist cannot draw | [ ] |
-| Mixed 2v2 Arena | 4 | Six rounds alternate teams and rotate artists; scores persist | [ ] |
+| Mixed 2v2 Arena | 4 | Configured rounds alternate teams and rotate artists; scores persist | [ ] |
 | Human vs agent Exhibition | 2+ | Controller labels change presentation, not authority rules | [ ] |
 | Agent vs agent Exhibition | 2+ agents | One agent draws while only eligible teammate agent guesses | [ ] |
 | Late spectator | 1 late join | Canonical canvas/state loads without replaying private prompt | [ ] |

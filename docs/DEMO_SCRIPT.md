@@ -47,7 +47,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 1:05–1:20 — reverse roles
 
-**Picture:** Round transition remains readable for its minimum display time. The private human card appears while the Lens withholds `submit_guesses`. Hide the card and place the opening stroke; the 90-second clock begins and `submit_guesses` appears.
+**Picture:** Round transition remains readable for its minimum display time. The private human card appears while the Lens withholds `submit_guesses`. Hide the card and place the opening stroke; the configured round clock begins and `submit_guesses` appears.
 
 **Narration:** “Now the exact same room reverses direction. The artist tools disappear. The agent becomes a guesser—and never receives the answer.”
 

@@ -13,7 +13,7 @@ import {
   type VectorPrimitive,
 } from "../src/shared/game";
 import { arcPath, pointsAttribute, remainingSeconds } from "../src/shared/format";
-import { compactWebMcpState, webMcpToolNames } from "../src/client/webMcpAvailability";
+import { compactWebMcpRoundResult, compactWebMcpState, webMcpToolNames } from "../src/client/webMcpAvailability";
 
 const line: VectorPrimitive = {
   type: "line",
@@ -43,6 +43,7 @@ function snapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
     revision: 3,
     roundIndex: 0,
     totalRounds: 6,
+    roundDurationMs: 90_000,
     activeTeam: "cobalt",
     artistSeatId: "artist",
     endsAt: 100_000,
@@ -268,6 +269,7 @@ describe("dynamic WebMCP availability", () => {
   it("tracks agent controller, host, phase, and drawing role", () => {
     expect(webMcpToolNames(snapshot({ phase: "lobby" }), "artist")).toEqual([
       "get_match_state",
+      "configure_match",
       "start_match",
     ]);
     expect(webMcpToolNames(snapshot(), "artist")).toEqual([
@@ -295,6 +297,33 @@ describe("dynamic WebMCP availability", () => {
       }],
     });
     expect(webMcpToolNames(practiceLobby, null)).toEqual(["get_match_state", "play_mcpencil"]);
+  });
+
+  it("lets an agent host configure balanced lobby settings", () => {
+    const agentPracticeHost = snapshot({
+      mode: "practice",
+      phase: "lobby",
+      totalRounds: 4,
+      roundDurationMs: 60_000,
+      artistSeatId: null,
+      seats: [{
+        id: "artist",
+        name: "Agent Host",
+        team: "cobalt",
+        controller: "agent",
+        isHost: true,
+        isReady: true,
+        isConnected: true,
+      }],
+    });
+    expect(webMcpToolNames(agentPracticeHost, "artist")).toEqual([
+      "get_match_state",
+      "configure_match",
+    ]);
+    expect(compactWebMcpState(agentPracticeHost, "artist")).toMatchObject({
+      competitive: false,
+      matchSettings: { totalRounds: 4, roundDurationMs: 60_000 },
+    });
   });
 
   it("lets an agent join a human-hosted arena without replacing the host seat", () => {
@@ -446,15 +475,45 @@ describe("dynamic WebMCP availability", () => {
       "get_match_state",
       "get_round_result",
     ]);
-    expect(compactWebMcpState({ ...humanDrawing, phase: "match-end" }, agent.id)).toMatchObject({
+    const practiceEnd = {
+      ...humanDrawing,
+      phase: "match-end" as const,
+      scores: { cobalt: 283, coral: 0 },
+      analytics: { ...humanDrawing.analytics, correctGuesses: 2 },
+    };
+    const practiceEndState = compactWebMcpState(practiceEnd, agent.id);
+    expect(practiceEndState).toMatchObject({
       phase: "match-end",
       mustContinue: false,
+      competitive: false,
+      outcome: {
+        kind: "practice_complete",
+        competitive: false,
+        winner: null,
+        roundsPlayed: 2,
+        solvedRounds: 2,
+        instruction: expect.stringContaining("do not declare a team winner"),
+      },
       nextAction: {
         tool: null,
         arguments: {},
+        instruction: expect.stringContaining("do not name a winning team"),
       },
       urgency: "complete",
     });
+    expect(practiceEndState).not.toHaveProperty("scores");
+    expect(practiceEndState).not.toHaveProperty("yourTeam");
+    expect(practiceEndState).not.toHaveProperty("activeTeam");
+    expect(practiceEndState.practiceProgress).not.toHaveProperty("collaborativePoints");
+    expect(practiceEndState.seats[0]).not.toHaveProperty("team");
+    expect(compactWebMcpRoundResult(practiceEnd)).toMatchObject({
+      prompt: firstResult.prompt,
+      outcome: "solved",
+      competitive: false,
+      instruction: expect.stringContaining("collaborative"),
+    });
+    expect(compactWebMcpRoundResult(practiceEnd)).not.toHaveProperty("team");
+    expect(compactWebMcpRoundResult(practiceEnd)).not.toHaveProperty("pointsAwarded");
   });
 
   it("keeps the previous round result readable while the next artist draws", () => {

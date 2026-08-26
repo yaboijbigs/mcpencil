@@ -9,6 +9,10 @@ export const ROUND_RESULT_MAX_MS = 15_000;
 export const TEAM_ROUND_COUNT = 6;
 export const MAX_BATCH_PRIMITIVES = 12;
 
+export const PRACTICE_ROUND_OPTIONS = [2, 4, 6] as const;
+export const ARENA_ROUND_OPTIONS = [4, 6, 8] as const;
+export const ROUND_DURATION_OPTIONS_MS = [45_000, 60_000, 90_000] as const;
+
 export const TEAM_IDS = ["cobalt", "coral"] as const;
 export const CONTROLLER_TYPES = ["human", "agent"] as const;
 export const ORIGINS = ["human-ui", "webmcp"] as const;
@@ -166,6 +170,7 @@ export interface RoomSnapshot {
   revision: number;
   roundIndex: number;
   totalRounds: number;
+  roundDurationMs: number;
   activeTeam: TeamId;
   artistSeatId: string | null;
   endsAt: number | null;
@@ -217,6 +222,16 @@ const ConfigureSeatCommandSchema = z.object({
   controller: ControllerSchema,
 }).strict();
 
+const ConfigureMatchCommandSchema = z.object({
+  type: z.literal("configure_match"),
+  totalRounds: z.number().int(),
+  roundDurationMs: z.number().int().refine(
+    (value) => (ROUND_DURATION_OPTIONS_MS as readonly number[]).includes(value),
+    { message: "Round duration must be 45, 60, or 90 seconds." },
+  ),
+  origin: OriginSchema,
+}).strict();
+
 const StartMatchCommandSchema = z.object({
   type: z.literal("start_match"),
   origin: OriginSchema,
@@ -251,6 +266,7 @@ const ReadyNextCommandSchema = z.object({
 export const RoomCommandSchema = z.discriminatedUnion("type", [
   ReadyCommandSchema,
   ConfigureSeatCommandSchema,
+  ConfigureMatchCommandSchema,
   StartMatchCommandSchema,
   DrawBatchCommandSchema,
   UndoDrawBatchCommandSchema,

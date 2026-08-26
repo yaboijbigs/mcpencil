@@ -1,10 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import {
+  ARENA_ROUND_OPTIONS,
   CommandEnvelopeSchema,
   CreateRoomRequestSchema,
   JoinRoomRequestSchema,
+  PRACTICE_ROUND_OPTIONS,
   PrimitiveSchema,
   ROUND_DURATION_MS,
+  ROUND_DURATION_OPTIONS_MS,
   ROUND_PREP_DURATION_MS,
   ROUND_RESULT_MAX_MS,
   ROUND_RESULT_MIN_MS,
@@ -49,6 +52,7 @@ interface RoomRow extends SqlRecord {
   revision: number;
   round_index: number;
   total_rounds: number;
+  round_duration_ms: number;
   active_team: TeamId;
   artist_seat_id: string | null;
   ends_at: number | null;
@@ -152,7 +156,7 @@ type DeadlineTransition =
   | "result-extended"
   | "round-advanced";
 
-const SCHEMA_VERSION = 1;
+const SCHEMA_VERSION = 2;
 const HUMAN_DRAW_RATE_LIMIT_MS = 40;
 const AGENT_DRAW_RATE_LIMIT_MS = 250;
 const GUESS_RATE_LIMIT_MS = 350;
@@ -174,13 +178,15 @@ export class GameRoom extends DurableObject<Env> {
         applied_at INTEGER NOT NULL
       )
     `);
-    const applied = this.rows<SqlRecord & { version: number }>(
-      "SELECT version FROM schema_migrations WHERE version = ?",
-      SCHEMA_VERSION,
-    )[0];
-    if (applied !== undefined) return;
+    const appliedVersions = new Set(
+      this.rows<SqlRecord & { version: number }>(
+        "SELECT version FROM schema_migrations ORDER BY version",
+      ).map((row) => row.version),
+    );
+    if (appliedVersions.has(SCHEMA_VERSION)) return;
 
-    this.ctx.storage.transactionSync(() => {
+    if (!appliedVersions.has(1)) {
+      this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(`
         CREATE TABLE IF NOT EXISTS room (
           id INTEGER PRIMARY KEY CHECK (id = 1),
@@ -296,12 +302,24 @@ export class GameRoom extends DurableObject<Env> {
           PRIMARY KEY (seat_id, action)
         )
       `);
-      this.ctx.storage.sql.exec(
-        "INSERT INTO schema_migrations(version, applied_at) VALUES (?, ?)",
-        SCHEMA_VERSION,
-        Date.now(),
-      );
-    });
+        this.ctx.storage.sql.exec(
+          "INSERT INTO schema_migrations(version, applied_at) VALUES (1, ?)",
+          Date.now(),
+        );
+      });
+    }
+
+    if (!appliedVersions.has(2)) {
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE room ADD COLUMN round_duration_ms INTEGER NOT NULL DEFAULT 90000",
+        );
+        this.ctx.storage.sql.exec(
+          "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)",
+          Date.now(),
+        );
+      });
+    }
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -432,13 +450,14 @@ export class GameRoom extends DurableObject<Env> {
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
         `INSERT INTO room(
-          id, room_code, mode, phase, revision, round_index, total_rounds, active_team,
+          id, room_code, mode, phase, revision, round_index, total_rounds, round_duration_ms, active_team,
           artist_seat_id, ends_at, canvas_version, score_cobalt, score_coral,
           round_result_json, created_at
-        ) VALUES (1, ?, ?, 'lobby', 1, -1, ?, 'cobalt', NULL, NULL, 0, 0, 0, NULL, ?)`,
+        ) VALUES (1, ?, ?, 'lobby', 1, -1, ?, ?, 'cobalt', NULL, NULL, 0, 0, 0, NULL, ?)`,
         roomCode,
         data.mode,
         totalRounds,
+        ROUND_DURATION_MS,
         now,
       );
       this.ctx.storage.sql.exec(
@@ -676,6 +695,8 @@ export class GameRoom extends DurableObject<Env> {
         return this.readyUpSync(seat, command.ready, command.origin, now);
       case "configure_seat":
         return this.configureSeatSync(seat, command.team, command.controller, now);
+      case "configure_match":
+        return this.configureMatchSync(seat, command, now);
       case "start_match":
         return this.startMatchSync(seat, command.origin, now);
       case "draw_batch":
@@ -740,6 +761,63 @@ export class GameRoom extends DurableObject<Env> {
         detail: `Seat set to ${team} ${controller}.`,
         seatId: seat.id,
         origin: "human-ui",
+        canvasVersion: room.canvas_version,
+        now,
+      });
+    });
+    return { result: this.commandResult(), alarm: null };
+  }
+
+  private configureMatchSync(
+    seat: SeatRow,
+    command: Extract<RoomCommand, { type: "configure_match" }>,
+    now: number,
+  ): CommandExecution {
+    const room = this.requireRoom();
+    this.requirePhase(room, "lobby");
+    if (seat.is_host !== 1) {
+      throw new ApiError(403, "HOST_ONLY", "Only the host can configure the match.");
+    }
+    this.assertControllerOrigin(seat, command.origin);
+    const roundOptions: readonly number[] = room.mode === "practice"
+      ? PRACTICE_ROUND_OPTIONS
+      : ARENA_ROUND_OPTIONS;
+    if (!roundOptions.includes(command.totalRounds)) {
+      throw new ApiError(
+        400,
+        "INVALID_MATCH_SETTINGS",
+        `${room.mode === "practice" ? "Practice Pair" : "Arena"} supports ${roundOptions.join(", ")} rounds.`,
+      );
+    }
+    const durationOptions: readonly number[] = ROUND_DURATION_OPTIONS_MS;
+    if (!durationOptions.includes(command.roundDurationMs)) {
+      throw new ApiError(
+        400,
+        "INVALID_MATCH_SETTINGS",
+        "Round duration must be 45, 60, or 90 seconds.",
+      );
+    }
+
+    this.ctx.storage.transactionSync(() => {
+      this.ctx.storage.sql.exec(
+        `UPDATE room SET
+           total_rounds = ?, round_duration_ms = ?, revision = revision + 1
+         WHERE id = 1`,
+        command.totalRounds,
+        command.roundDurationMs,
+      );
+      if (room.mode !== "practice") {
+        this.ctx.storage.sql.exec(
+          "UPDATE seats SET is_ready = CASE WHEN controller = 'agent' THEN 1 ELSE 0 END",
+        );
+      }
+      this.insertActivitySync({
+        roundIndex: -1,
+        kind: command.origin === "webmcp" ? "tool-call" : "human-action",
+        label: "match_configured",
+        detail: `${command.totalRounds} rounds at ${command.roundDurationMs / 1_000} seconds each.`,
+        seatId: seat.id,
+        origin: command.origin,
         canvasVersion: room.canvas_version,
         now,
       });
@@ -817,7 +895,7 @@ export class GameRoom extends DurableObject<Env> {
     const batchId = crypto.randomUUID();
     const finalVersion = room.canvas_version + command.primitives.length;
     const startsRound = room.phase === "round-prep";
-    const drawingEndsAt = startsRound ? now + ROUND_DURATION_MS : room.ends_at;
+    const drawingEndsAt = startsRound ? now + room.round_duration_ms : room.ends_at;
     const result: CommandResult = {
       accepted: true,
       revision: room.revision + 1,
@@ -1162,7 +1240,7 @@ export class GameRoom extends DurableObject<Env> {
       team: round.team,
       ...(guessedBySeatId === null ? {} : { guessedBySeatId }),
       pointsAwarded: points,
-      elapsedMs: Math.min(ROUND_DURATION_MS, Math.max(0, now - round.started_at)),
+      elapsedMs: Math.min(room.round_duration_ms, Math.max(0, now - round.started_at)),
       strokeCount,
       toolCallCount,
     };
@@ -1202,7 +1280,7 @@ export class GameRoom extends DurableObject<Env> {
   }
 
   private startDrawingClockSync(room: RoomRow, now: number): void {
-    const drawingEndsAt = now + ROUND_DURATION_MS;
+    const drawingEndsAt = now + room.round_duration_ms;
     this.ctx.storage.sql.exec(
       "UPDATE rounds SET started_at = ?, ends_at = ? WHERE round_index = ?",
       now,
@@ -1468,6 +1546,7 @@ export class GameRoom extends DurableObject<Env> {
       revision: room.revision,
       roundIndex,
       totalRounds: room.total_rounds,
+      roundDurationMs: room.round_duration_ms,
       activeTeam: room.active_team,
       artistSeatId: room.artist_seat_id,
       endsAt: room.ends_at,

@@ -1,7 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  ARENA_ROUND_OPTIONS,
   canGuess,
   isArtist,
+  PRACTICE_ROUND_OPTIONS,
+  ROUND_DURATION_OPTIONS_MS,
   type ControllerType,
   type GuessEvent,
   type PrivatePrompt,
@@ -272,8 +275,8 @@ function Landing({
             <div className="entry-card-copy">
               <span className={`mode-glyph ${tab}`}><PencilIcon /></span>
               <div>
-                <h2>{tab === "practice" ? "Two rounds. Both directions." : tab === "arena" ? "Build your dream team." : "Your team is waiting."}</h2>
-                <p>{tab === "practice" ? "Your agent draws, then you draw. The fastest way to see the magic." : tab === "arena" ? "Create a six-round room for two teams of 2–4 humans and agents." : "Enter the five-character code from your host."}</p>
+                <h2>{tab === "practice" ? "Both directions. Your pace." : tab === "arena" ? "Build your dream team." : "Your team is waiting."}</h2>
+                <p>{tab === "practice" ? "Alternate drawing with your agent, then choose the round count and drawing time in the waiting room." : tab === "arena" ? "Create a configurable team room for 2–4 humans and agents per side." : "Enter the five-character code from your host."}</p>
               </div>
             </div>
             <form className="entry-form" onSubmit={(event) => void submit(event)}>
@@ -337,15 +340,19 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, copiedInvite, onCopyIn
     : teams.every((team) => activeSeats.filter((seat) => seat.team === team).length >= 2);
 
   if (snapshot.mode === "practice") {
+    const drawingsEach = snapshot.totalRounds / 2;
     return <main className="lobby-page practice-lobby">
       <section className="lobby-heading"><div><span className="eyebrow">Practice Pair</span><h1>Invite your browser agent.</h1><p>The room starts automatically after a separate agent seat joins through WebMCP.</p></div><InviteCard roomCode={snapshot.roomCode} copiedInvite={copiedInvite} onCopyInvite={onCopyInvite} /></section>
       <div className="practice-lobby-grid">
         <section className="practice-duo-card">
           {snapshot.seats.map((seat, index) => <div className="practice-player" key={seat.id}><span className={`avatar ${seat.controller}`}>{seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}</span><div><small>{seat.controller === "agent" ? "BROWSER AGENT" : "HUMAN PLAYER"}</small><strong>{seat.name}{seat.id === seatId ? " (you)" : ""}</strong><span><CheckIcon /> Ready</span></div>{index === 0 ? <b>↔</b> : null}</div>)}
-          <div className="practice-explainer"><SparkIcon /><p><strong>Round one:</strong> your agent draws and you guess.<br /><strong>Round two:</strong> you draw and your agent guesses.</p></div>
+          <div className="practice-explainer"><SparkIcon /><p><strong>{snapshot.totalRounds} alternating rounds:</strong> your agent draws first, then you switch roles. You each draw {drawingsEach} {drawingsEach === 1 ? "time" : "times"}.</p></div>
           <p className="waiting-host"><span className="pulse-dot" />{enoughPlayers ? "Agent joined — opening the first round…" : "Waiting for an agent to call play_mcpencil…"}</p>
         </section>
-        <aside className="lobby-controls">{lens}</aside>
+        <aside className="lobby-controls">
+          <GameSettingsCard snapshot={snapshot} self={self} busy={busy} onConfigure={(totalRounds, roundDurationMs) => onCommand({ type: "configure_match", totalRounds, roundDurationMs, origin: "human-ui" })} />
+          {lens}
+        </aside>
       </div>
     </main>;
   }
@@ -374,12 +381,63 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, copiedInvite, onCopyIn
             <label>Controller</label><div className="segmented"><button type="button" className={self.controller === "human" ? "active" : ""} onClick={() => void onCommand({ type: "configure_seat", team: self.team, controller: "human" })}><PeopleIcon /> Human</button><button type="button" className={self.controller === "agent" ? "active" : ""} onClick={() => void onCommand({ type: "configure_seat", team: self.team, controller: "agent" })}><BotIcon /> Agent</button></div>
             {self.controller === "human" ? <button className={`ready-button ${self.isReady ? "is-ready" : ""}`} type="button" disabled={busy} onClick={() => void onCommand({ type: "ready_up", ready: !self.isReady, origin: "human-ui" })}>{self.isReady ? <><CheckIcon /> Ready!</> : "I’m ready"}</button> : <div className="agent-guess-note"><BotIcon /><div><strong>Agent seat is ready.</strong><span>No extra ready-up call required.</span></div></div>}
           </section>
+          <GameSettingsCard snapshot={snapshot} self={self} busy={busy} onConfigure={(totalRounds, roundDurationMs) => onCommand({ type: "configure_match", totalRounds, roundDurationMs, origin: "human-ui" })} />
           {self.isHost ? self.controller === "human" ? <button className="primary-button jumbo" type="button" disabled={busy || !allReady || !enoughPlayers} onClick={() => void onCommand({ type: "start_match", origin: "human-ui" })}>{!enoughPlayers ? "Need 2 live players on each team" : !allReady ? `Waiting for ${activeSeats.filter((seat) => !seat.isReady).length} player${activeSeats.filter((seat) => !seat.isReady).length === 1 ? "" : "s"}…` : <>Start match <ArrowIcon /></>}</button> : <p className="waiting-host"><span className="pulse-dot" />The agent host can start with <code>start_match</code>.</p> : <p className="waiting-host"><span className="pulse-dot" />Waiting for the host to start…</p>}
           {lens}
         </aside>
       </div>
     </main>
   );
+}
+
+function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
+  snapshot: RoomSnapshot;
+  self: RoomSnapshot["seats"][number];
+  busy: boolean;
+  onConfigure(totalRounds: number, roundDurationMs: number): Promise<unknown>;
+}) {
+  const roundOptions = snapshot.mode === "practice" ? PRACTICE_ROUND_OPTIONS : ARENA_ROUND_OPTIONS;
+  const humanHost = self.isHost && self.controller === "human";
+  const canEdit = humanHost && !busy;
+  const status = busy && humanHost
+    ? "Saving room settings…"
+    : !self.isHost
+      ? "Only the human host can change these settings."
+      : self.controller === "agent"
+        ? "Switch the host seat to Human to change settings here."
+        : "You’re the host — changes update for everyone.";
+
+  return <section className={`settings-card ${canEdit ? "is-editable" : "is-locked"}`} aria-labelledby="game-settings-title">
+    <header>
+      <div><span className="eyebrow">Before you play</span><h3 id="game-settings-title">Game settings</h3></div>
+      <span className="settings-summary" aria-label={`${snapshot.totalRounds} rounds, ${snapshot.roundDurationMs / 1000} seconds each`}>{snapshot.totalRounds} × {snapshot.roundDurationMs / 1000}s</span>
+    </header>
+    <fieldset disabled={!canEdit}>
+      <legend>Number of rounds</legend>
+      <div className="settings-options" aria-label="Number of rounds">
+        {roundOptions.map((rounds) => <button
+          type="button"
+          key={rounds}
+          className={snapshot.totalRounds === rounds ? "is-selected" : ""}
+          aria-pressed={snapshot.totalRounds === rounds}
+          onClick={() => void onConfigure(rounds, snapshot.roundDurationMs)}
+        >{rounds}</button>)}
+      </div>
+    </fieldset>
+    <fieldset disabled={!canEdit}>
+      <legend>Drawing time</legend>
+      <div className="settings-options" aria-label="Drawing time in seconds">
+        {ROUND_DURATION_OPTIONS_MS.map((durationMs) => <button
+          type="button"
+          key={durationMs}
+          className={snapshot.roundDurationMs === durationMs ? "is-selected" : ""}
+          aria-pressed={snapshot.roundDurationMs === durationMs}
+          onClick={() => void onConfigure(snapshot.totalRounds, durationMs)}
+        >{durationMs / 1000}s</button>)}
+      </div>
+    </fieldset>
+    <p className="settings-status" role="status"><span className={canEdit ? "settings-edit-mark" : "settings-lock-mark"} aria-hidden="true">{canEdit ? "✎" : "•"}</span>{status}</p>
+  </section>;
 }
 
 function InviteCard({ roomCode, copiedInvite, onCopyInvite }: {
@@ -495,7 +553,8 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
     await onCommand({ type: "undo_draw_batch", expectedVersion: snapshot.canvasVersion, origin: "human-ui" });
   };
   const seconds = remainingSeconds(snapshot.endsAt, now) ?? 0;
-  const timerScale = snapshot.phase === "round-prep" ? 8 : snapshot.phase === "round-end" ? 15 : 90;
+  const roundDurationSeconds = snapshot.roundDurationMs / 1000;
+  const timerScale = snapshot.phase === "round-prep" ? 8 : snapshot.phase === "round-end" ? 15 : roundDurationSeconds;
   const timerProgress = snapshot.endsAt ? Math.max(0, Math.min(1, seconds / timerScale)) : 0;
   const roleLabel = humanArtist
     ? isPrep ? "YOU HAVE THE OPENING STROKE" : "YOU ARE DRAWING"
@@ -514,11 +573,11 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
                 : "SPECTATING";
   const roleMessage = humanArtist
     ? isPrep
-      ? (privatePromptGate === "hidden" ? "Draw one opening stroke — it starts the 90-second clock." : prompt?.prompt ?? "Fetching your secret prompt…")
+      ? (privatePromptGate === "hidden" ? `Draw one opening stroke — it starts the ${roundDurationSeconds}-second clock.` : prompt?.prompt ?? "Fetching your secret prompt…")
       : (privatePromptGate === "hidden" ? "Prompt hidden — draw it from memory." : prompt?.prompt ?? "Fetching your secret prompt…")
     : primaryAgentArtist
       ? isPrep
-        ? "Call draw_stroke now. One primitive starts the 90-second clock."
+        ? `Call draw_stroke now. One primitive starts the ${roundDurationSeconds}-second clock.`
         : "Keep calling draw_stroke — one visible stroke at a time."
       : agentArtist
         ? isPrep
@@ -534,7 +593,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
                 ? "Keep drawing while your agent calls submit_guesses after every meaningful update."
                 : `Watching ${artist?.name ?? "the artist"}`;
   const timerLabel = snapshot.phase === "round-prep"
-    ? "First stroke starts 90s"
+    ? `First stroke starts ${roundDurationSeconds}s`
     : snapshot.phase === "round-end"
       ? "Results stay up while players ready"
       : artist
@@ -552,7 +611,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
           <span className="private-prompt-icon"><PencilIcon /></span>
           <span className="eyebrow">Private human prompt</span>
           <h1>{prompt?.prompt ?? (promptError ? "Prompt unavailable" : "Opening your prompt…")}</h1>
-          <p>{prompt ? `${prompt.category} · memorize this, then hide it. Your first stroke starts the 90-second clock.` : promptError ?? "Only you should look at this card."}</p>
+          <p>{prompt ? `${prompt.category} · memorize this, then hide it. Your first stroke starts the ${roundDurationSeconds}-second clock.` : promptError ?? "Only you should look at this card."}</p>
           <div className="private-prompt-warning"><span aria-hidden="true">◉̸</span> The agent’s <code>submit_guesses</code> tool stays disabled until your first stroke.</div>
           {promptError ? <button className="secondary-button" type="button" onClick={() => setPromptAttempt((attempt) => attempt + 1)}>Retry private prompt</button> : <button
             className="primary-button jumbo"
@@ -603,7 +662,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
             {humanGuesser ? <form className="guess-composer" onSubmit={(event) => void submitGuess(event)}>
               <span className="guess-pencil"><PencilIcon /></span><label><span className="sr-only">Your guess</span><input autoFocus value={guess} onChange={(event) => setGuess(event.target.value)} maxLength={80} placeholder="What is the drawing?" autoComplete="off" /></label>
               <button className="primary-button" type="submit" disabled={busy || !guess.trim()}>Guess <ArrowIcon /></button>
-            </form> : agentGuesser ? <div className="agent-guess-note"><BotIcon /><div><strong>{primaryAgentGuesser ? <>Use <code>get_match_state</code>, then <code>submit_guesses</code>.</> : <>Your agent has <code>submit_guesses</code>.</>}</strong><span>{primaryAgentGuesser ? "Send broad candidates immediately, then inspect every new canvas version." : "Ask it to inspect the canvas and submit every best guess."}</span></div></div> : prepGuesser ? <div className="guess-locked-note" role="status"><span className="pulse-dot" /><div><strong>Guessing opens with the first stroke.</strong><span>The 90-second clock and <code>submit_guesses</code> activate together.</span></div></div> : null}
+            </form> : agentGuesser ? <div className="agent-guess-note"><BotIcon /><div><strong>{primaryAgentGuesser ? <>Use <code>get_match_state</code>, then <code>submit_guesses</code>.</> : <>Your agent has <code>submit_guesses</code>.</>}</strong><span>{primaryAgentGuesser ? "Send broad candidates immediately, then inspect every new canvas version." : "Ask it to inspect the canvas and submit every best guess."}</span></div></div> : prepGuesser ? <div className="guess-locked-note" role="status"><span className="pulse-dot" /><div><strong>Guessing opens with the first stroke.</strong><span>The {roundDurationSeconds}-second clock and <code>submit_guesses</code> activate together.</span></div></div> : null}
           </section>
 
           <aside className="game-sidebar">
@@ -729,7 +788,9 @@ function MatchEnd({ snapshot, seatId, lens, onReplay }: { snapshot: RoomSnapshot
   const winner: TeamId | "tie" = snapshot.scores.cobalt === snapshot.scores.coral ? "tie" : snapshot.scores.cobalt > snapshot.scores.coral ? "cobalt" : "coral";
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const practice = snapshot.mode === "practice";
-  return <main className="match-end-page"><section className="winner-banner"><span className="eyebrow">{practice ? "Two-way practice complete" : "Final score"}</span><h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>{practice ? <div className="practice-complete"><PeopleIcon /><span>↔</span><BotIcon /></div> : <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>}<p>{practice ? "One agent drawing. One human drawing. Two successful directions of WebMCP play." : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p></section><div className="end-content"><ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} /><aside>{lens}<button className="secondary-button full" type="button" onClick={() => window.location.assign("/")}>Play another match</button></aside></div></main>;
+  const practiceTurnsEach = snapshot.totalRounds / 2;
+  const practiceTurnLabel = practiceTurnsEach === 1 ? "drawing" : "drawings";
+  return <main className="match-end-page"><section className="winner-banner"><span className="eyebrow">{practice ? `${snapshot.totalRounds}-round practice complete` : "Final score"}</span><h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>{practice ? <div className="practice-complete"><PeopleIcon /><span>↔</span><BotIcon /></div> : <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>}<p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p></section><div className="end-content"><ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} /><aside>{lens}<button className="secondary-button full" type="button" onClick={() => window.location.assign("/")}>Play another match</button></aside></div></main>;
 }
 
 function LoadingScreen() {

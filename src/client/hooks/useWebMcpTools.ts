@@ -1,8 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import {
+  ARENA_ROUND_OPTIONS,
   DrawBatchCommandSchema,
+  PRACTICE_ROUND_OPTIONS,
   PrimitiveSchema,
+  ROUND_DURATION_OPTIONS_MS,
   isArtist,
   type CommandResult,
   type ControllerType,
@@ -12,7 +15,7 @@ import {
   type RoomSnapshot,
   type TeamId,
 } from "../../shared/game";
-import { compactWebMcpState, webMcpToolNames } from "../webMcpAvailability";
+import { compactWebMcpRoundResult, compactWebMcpState, webMcpToolNames } from "../webMcpAvailability";
 
 export interface LensInvocation {
   id: string;
@@ -86,6 +89,11 @@ const SubmitGuessesInput = z.object({
 const MatchStateInput = z.object({
   afterRevision: z.number().int().min(0).optional(),
   waitMs: z.number().int().min(0).max(25_000).optional(),
+}).strict();
+
+const ConfigureMatchInput = z.object({
+  totalRounds: z.number().int(),
+  roundDurationMs: z.number().int(),
 }).strict();
 
 const TOOL_ACK_GRACE_MS = 400;
@@ -406,7 +414,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       tool({
         name: "start_practice",
         title: "Start agent practice",
-        description: "Open a two-round practice room with this browser agent seated as the first player.",
+        description: "Open a balanced Practice Pair room with this browser agent seated as the first player. The host can configure rounds and drawing time in the lobby.",
         inputSchema: {
           type: "object", properties: { name: { type: "string", minLength: 1, maxLength: 24, description: "Your display name." } },
           required: ["name"], additionalProperties: false,
@@ -477,6 +485,49 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       }),
     );
   }
+
+  if (availableTools.has("configure_match")) definitions.push(tool({
+    name: "configure_match",
+    title: "Configure MCPencil match",
+    description: "Set the lobby's total rounds and drawing time. Use only when the user asks to change game settings. Practice supports 2, 4, or 6 rounds; team modes support 4, 6, or 8. Drawing time supports 45, 60, or 90 seconds. Only the agent host can call this before play begins.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        totalRounds: { type: "integer", enum: [2, 4, 6, 8], description: "Even total rounds; allowed values depend on the room mode." },
+        roundDurationMs: { type: "integer", enum: [...ROUND_DURATION_OPTIONS_MS], description: "Drawing time per round in milliseconds." },
+      },
+      required: ["totalRounds", "roundDurationMs"],
+      additionalProperties: false,
+    },
+    execute: (input, options) => run("configure_match", input, options?.signal, async (signal) => {
+      const parsed = ConfigureMatchInput.parse(input);
+      const activeSnapshot = snapshotRef.current;
+      if (activeSnapshot === null || activeSnapshot.phase !== "lobby") {
+        throw new Error("Match settings are available only in the lobby.");
+      }
+      const roundOptions: readonly number[] = activeSnapshot.mode === "practice"
+        ? PRACTICE_ROUND_OPTIONS
+        : ARENA_ROUND_OPTIONS;
+      if (!roundOptions.includes(parsed.totalRounds)) {
+        throw new Error(`${activeSnapshot.mode === "practice" ? "Practice" : "Team modes"} allow ${roundOptions.join(", ")} rounds.`);
+      }
+      if (!(ROUND_DURATION_OPTIONS_MS as readonly number[]).includes(parsed.roundDurationMs)) {
+        throw new Error("Round time must be 45, 60, or 90 seconds.");
+      }
+      const result = await actionsRef.current.command({
+        type: "configure_match",
+        totalRounds: parsed.totalRounds,
+        roundDurationMs: parsed.roundDurationMs,
+        origin: "webmcp",
+      }, signal);
+      return {
+        ...result,
+        matchSettings: parsed,
+        mustContinue: true,
+        nextAction: { tool: "get_match_state", arguments: {}, instruction: "Confirm the synchronized lobby settings and continue preparing the match." },
+      };
+    }, compactCommand),
+  }));
 
   if (availableTools.has("start_match")) definitions.push(tool({
     name: "start_match", title: "Start MCPencil match", description: "Start once both teams have two live, ready players. Agent seats are ready automatically.",
@@ -621,16 +672,19 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   if (availableTools.has("get_round_result")) {
     definitions.push(tool({
       name: "get_round_result", title: "Read round result",
-      description: "Read the most recently completed round's revealed prompt, winner, points, timing, strokes, and tool usage. This remains available during the following round.",
+      description: "Read the most recently completed round's revealed prompt, outcome, timing, strokes, and tool usage. Practice results are explicitly collaborative and never report a team winner or competitive score. This remains available during the following round.",
       inputSchema: EmptySchema, annotations: { readOnlyHint: true, untrustedContentHint: true },
       execute: (input, options) => run("get_round_result", input, options?.signal, () => {
-        const state = compactWebMcpState(snapshotRef.current, seatIdRef.current, roomInviteCode);
+        const currentSnapshot = snapshotRef.current;
+        const state = compactWebMcpState(currentSnapshot, seatIdRef.current, roomInviteCode);
         return {
-          result: snapshotRef.current?.roundResult ?? null,
+          result: currentSnapshot === null ? null : compactWebMcpRoundResult(currentSnapshot),
           phase: state.phase,
           mustContinue: state.mustContinue,
           completionCondition: state.completionCondition,
           nextAction: state.nextAction,
+          ...("competitive" in state ? { competitive: state.competitive } : {}),
+          ...("outcome" in state ? { matchOutcome: state.outcome } : {}),
         };
       }, () => "Round result read"),
     }));
