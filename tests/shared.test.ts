@@ -560,6 +560,25 @@ describe("dynamic WebMCP availability", () => {
       ...humanDrawing,
       phase: "match-end" as const,
       scores: { cobalt: 283, coral: 0 },
+      guesses: [{
+        id: "practice-guess-1",
+        roundIndex: 0,
+        seatId: humanHost.id,
+        displayName: humanHost.name,
+        guess: "tiny dragon",
+        origin: "human-ui" as const,
+        isCorrect: true,
+        createdAt: 1,
+      }, {
+        id: "practice-guess-2",
+        roundIndex: 1,
+        seatId: agent.id,
+        displayName: agent.name,
+        guess: "unrelated later guess",
+        origin: "webmcp" as const,
+        isCorrect: false,
+        createdAt: 2,
+      }],
       analytics: { ...humanDrawing.analytics, correctGuesses: 2 },
     };
     const practiceEndState = compactWebMcpState(practiceEnd, agent.id);
@@ -591,6 +610,12 @@ describe("dynamic WebMCP availability", () => {
       prompt: firstResult.prompt,
       outcome: "solved",
       competitive: false,
+      guessTranscript: [{
+        player: humanHost.name,
+        guess: "tiny dragon",
+        provenance: "human-ui",
+        correct: true,
+      }],
       instruction: expect.stringContaining("collaborative"),
     });
     expect(compactWebMcpRoundResult(practiceEnd)).not.toHaveProperty("team");

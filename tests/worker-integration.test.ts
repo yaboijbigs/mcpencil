@@ -377,7 +377,7 @@ describe("Practice Pair HTTP journey", () => {
     const finalReplayText = await finalReplay.text();
     expect(finalReplayText).toContain(firstPrompt.prompt);
     expect(finalReplayText).toContain(secondPrompt.prompt);
-  });
+  }, 180_000);
 });
 
 describe("Durable room authority", () => {

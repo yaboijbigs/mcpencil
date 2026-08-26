@@ -86,14 +86,15 @@ sequenceDiagram
     Q-->>R: committed
     R-->>P: versioned WebSocket snapshot/event
     R-->>C: compact acknowledgement
-    C->>C: await acknowledged local version
 ```
 
-The command carries an explicit `origin` for drawable and guess actions: `human-ui` or `webmcp`. Origin is analytics/provenance data, never authorization. Both origins hit the identical server handler.
+The acknowledgement follows persistence and the server's broadcast step and contains the authoritative version accepted by the room. Rendering is asynchronous on each receiving client, so the acknowledgement is not evidence that every browser has already painted that version.
+
+The command carries an explicit `origin` for drawable and guess actions: `human-ui` or `webmcp`. Origin is analytics data and is checked against the seat's declared controller type, never used as the source of authorization. Both origins hit the identical server handler. This label is not cryptographic attestation of a model, browser surface, or unmodified client.
 
 ## Canonical vector model
 
-The drawing protocol bounds normalized numeric coordinates to `0..1000`, while the visual SVG view box is `1000 × 700`. Tool descriptions and human pointer mapping target the visible `y=0..700` region; SVG clipping keeps any still-bounded off-canvas geometry invisible. Rendering scales the same canonical geometry uniformly to desktop, phone, and video layouts.
+The visual SVG view box is `1000 × 700`. The drawing protocol validates horizontal coordinates and shape extents against `x=0..1000` and vertical coordinates and extents against `y=0..700`, so an accepted primitive cannot exist only outside the visible canvas. Rendering scales the same canonical geometry uniformly to desktop, phone, and video layouts.
 
 Allowed primitives:
 
@@ -106,11 +107,11 @@ Allowed primitives:
 
 Each primitive uses an enumerated palette and stroke width, with an optional enumerated fill. The public `draw_stroke` WebMCP tool accepts exactly one primitive and generates a bounded idempotency key. The shared internal drawing command can represent human UI work, but the room rejects every WebMCP-origin mutation whose primitive count is not exactly one before persistence. Arbitrary SVG paths, markup, text, URLs, images, filters, event attributes, and external references never enter the renderer.
 
-The persisted canvas event stream is canonical. Live rendering, reconnect catch-up, replay, stroke counts, and analytics derive from those events rather than independent client state. Each agent tool acknowledgement follows its corresponding persisted broadcast, and undo removes the caller's last accepted stroke.
+The persisted canvas event stream is canonical. Live rendering, reconnect catch-up, replay, stroke counts, and analytics derive from those events rather than independent client state. Each agent tool acknowledgement follows its corresponding persistence and broadcast step, and undo removes the caller's last accepted stroke. A receiving client may paint the broadcast after the caller has received the acknowledgement.
 
 ## Realtime and reconnects
 
-The room accepts WebSockets through the Durable Object hibernation API. Connection attachment data identifies the already-authenticated seat without persisting its raw token. The room can survive idle periods without billing for a continuously live isolate.
+The room accepts WebSockets through the Durable Object hibernation API. The browser WebSocket API cannot set an `Authorization` header, so the client currently supplies the opaque seat token in the TLS-protected handshake query. The Worker transfers it to an internal header for room authorization; the Durable Object serializes only the resulting seat ID into connection attachment data and never persists the raw token. Application logs must not record handshake URLs. A short-lived, single-purpose socket ticket would further reduce exposure in intermediary access logs and remains release hardening. The room can survive idle periods without billing for a continuously live isolate.
 
 Broadcasts carry monotonically increasing room revisions and canvas versions. Clients ignore older data. After a disconnect, a client authenticates again, reports the last applied version, and receives either missing events or a canonical snapshot. Timers continue while no clients are connected.
 
@@ -126,19 +127,19 @@ flowchart LR
     CALC --> GATE[Atomic client role and phase gate]
     CALL --> GATE
     GATE --> BUS[Shared command bus]
-    BUS --> ACK[Wait for accepted local version]
+    BUS --> ACK[Persist, broadcast, return accepted version]
     ACK --> RESULT[Compact tool result + Lens entry]
 ```
 
-Tool descriptors provide discoverability, not authorization. From each role-safe snapshot and caller seat, the client atomically computes the exact tools actionable now; every handler rejects a call outside that set before work begins, and the Lens displays that set rather than pretending the stable registry was replaced. Invocation execution signals cancel pending waits and requests. The room authority independently validates the current token, seat, role, phase, deadline, rate, round, and canvas version, so a stale or manually invoked descriptor cannot cross a transition boundary. `get_match_state` remains role-safe and includes the private prompt only for the authenticated active agent artist. Artist calls to `draw_stroke` are serialized locally and version-chained; the Worker independently enforces the one-primitive invariant.
+Tool descriptors provide discoverability, not authorization. From each role-safe snapshot and caller seat, the client atomically computes the exact tools actionable now; every handler rejects a call outside that set before work begins, and the Lens displays that set rather than pretending the stable registry was replaced. Invocation execution signals cancel pending waits and requests. The room authority independently validates the current token, seat, role, phase, deadline, rate, round, and canvas version, so a stale or manually invoked descriptor cannot cross a transition boundary. `get_match_state` remains role-safe and includes the private prompt only for the authenticated active agent artist. An eligible agent guesser instead receives recent guesses and a bounded summary of the same canonical primitives rendered on screen. That geometry makes synchronization explicit and contains no semantic answer data, but it also means this release is not a pixel-only image-recognition benchmark. Artist calls to `draw_stroke` are serialized locally and version-chained; the Worker independently enforces the one-primitive invariant.
 
-Practice Pair is one authoritative two-seat session on one page. The human creates a waiting one-seat room, then the zero-context `play_mcpencil` entry tool returns a distinct opaque agent credential. The room starts only after both authenticated WebSockets connect. Human controls always send the human token with `human-ui` origin; WebMCP tools always send the companion token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them.
+Practice Pair is one authoritative two-seat session on one page. The human creates a waiting one-seat room, then the zero-context `play_mcpencil` entry tool returns a distinct opaque agent credential. The room starts only after both authenticated WebSockets connect. Human controls send the human token with `human-ui` origin; page tool handlers send the companion token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them. Because controller type is declared at join time, the origin field records the intended path but cannot prove that a modified client did not imitate it.
 
 Tool outputs are concise and structured. Player-created names and guesses are labeled untrusted content. Tool descriptions explain when a call is appropriate but do not echo user-authored content into instructions.
 
 ## Prompt secrecy
 
-The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a prepared or drawing phase it may leave the room only through a role-safe active-artist response after token, seat, round, phase, and artist checks. In Practice round two, the human artist reveal occupies a private UI subtree while the agent's `submit_guesses` action remains unauthorized. The human must explicitly memorize and hide the card; React unmounts the answer, and the first visible stroke starts the clock and enables guessing.
+The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a prepared or drawing phase it may leave the room only through a role-safe active-artist response after token, seat, round, phase, and artist checks. In every mode, a human artist reveal occupies a private UI subtree while a same-page companion agent's `submit_guesses` action remains unauthorized. The human must explicitly memorize and hide the card; React unmounts the answer, and the first visible stroke starts the clock and enables guessing.
 
 The following surfaces are explicitly prompt-free until round end:
 

@@ -2,13 +2,14 @@
 
 **Bring your own agent to game night.**
 
-MCPencil is a realtime draw-and-guess party game where humans and browser agents are first-class players. An agent can receive a private prompt and draw with constrained vector tools while people guess; then the roles reverse and the agent inspects a human drawing and submits its answer. The same room engine supports human-agent pairs, mixed teams, humans versus agents, and agent-versus-agent exhibitions.
+MCPencil is a realtime draw-and-guess party game where humans and browser agents are first-class players. An agent can receive a private prompt and draw with constrained vector tools while people guess; then the roles reverse and the agent interprets a human drawing and submits its answer. The same room engine supports human-agent pairs, mixed teams, humans versus agents, and agent-versus-agent exhibitions.
 
 - **Play:** [https://mcpencil.com](https://mcpencil.com)
 - **Source:** [github.com/yaboijbigs/mcpencil](https://github.com/yaboijbigs/mcpencil)
 - **Workers diagnostic:** [mcpencil.bigbeejack.workers.dev](https://mcpencil.bigbeejack.workers.dev) *(the custom domain above is canonical)*
-- **Demo video:** `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL` *(recording scheduled before submission)*
+- **Demo video:** `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL` *(required public, narrated YouTube video under three minutes; not recorded yet)*
 - **License:** [MIT](LICENSE)
+- **Third-party notices:** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
 > MCPencil is an original human-agent draw-and-guess game. It is not affiliated with any commercial drawing-game brand.
 
@@ -18,14 +19,14 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 2. Click **Invite an AI player** and paste the copied zero-context invitation into a fresh browser-agent conversation.
 3. The invitation tells the agent to open the agent-specific room URL and call `play_mcpencil`. That zero-argument tool joins and readies the agent; only then does Practice Pair begin.
 4. In round one, watch the WebMCP Lens: the private prompt stays masked and each `draw_stroke` call produces exactly one immediately visible mark. Guess the picture in the game UI.
-5. In round two, memorize the private prompt and hide the card. Your first stroke starts the configured round clock and makes `submit_guesses` actionable; draw while the agent visually inspects each canvas update.
-6. Open the result and replay panels. Compare every guess, human/WebMCP provenance, time-to-guess, strokes, and tool calls.
+5. In round two, memorize the private prompt and hide the card. Your first stroke starts the configured round clock and makes `submit_guesses` actionable; draw while the agent interprets the evolving canvas.
+6. Open the result and replay panels. Compare every guess, declared human/WebMCP origin, time-to-guess, strokes, and tool calls.
 
 The entire path demonstrates both WebMCP directions without an app-owned bot, model API key, bot OAuth flow, or DOM automation.
 
 ## Why WebMCP is essential
 
-MCPencil exposes a game protocol, not a pile of clickable UI. A stable page-lifetime registry describes the complete game vocabulary, while the actionable set changes with the authenticated seat, match phase, team, and role. An agent draws through the same typed command bus as a human and can only communicate with bounded low-level geometry—there is no semantic “draw a cat” tool and no image-generation escape hatch. When roles reverse, the canvas remains visual; the agent must understand what the human drew and use the page's guess tool.
+MCPencil exposes a game protocol, not a pile of clickable UI. A stable page-lifetime registry describes the complete game vocabulary, while the actionable set changes with the authenticated seat, match phase, team, and role. An agent draws through the same typed command bus as a human and can only communicate with bounded low-level geometry—there is no semantic “draw a cat” tool and no image-generation escape hatch. When roles reverse, the agent interprets the shared drawing and uses the page's guess tool.
 
 Every accepted mutation follows one path:
 
@@ -35,10 +36,12 @@ human UI or WebMCP tool
   → room/seat authorization
   → SQLite commit in one room Durable Object
   → versioned WebSocket broadcast
-  → local render acknowledgement
+  → compact acknowledgement containing the accepted version
 ```
 
-The collapsible **WebMCP Lens** makes this visible to judges: the exact tools actionable for the current role and phase, invocation timing, safe input summaries, compact results, canvas versions, and action provenance. Private prompts are represented only by masked events.
+The acknowledgement is returned after the authoritative mutation is persisted and its versioned update is broadcast. It does not claim that every remote browser has already painted that update; clients render the canonical event stream asynchronously.
+
+The collapsible **WebMCP Lens** makes this visible to judges: the exact tools actionable for the current role and phase, invocation timing, safe input summaries, compact results, canvas versions, and declared action origin. Private prompts are represented only by masked events.
 
 ### Zero-context invitations
 
@@ -52,7 +55,7 @@ Tools are registered imperatively with `document.modelContext.registerTool`. The
 
 | Tool | Actionable when | Mutates | What it does |
 |---|---|---:|---|
-| `get_match_state` | Always | No | Returns a role-safe summary. An authenticated active agent artist also receives its private prompt so it can draw immediately; an eligible agent guesser receives compact canvas geometry and recent guesses. No other role receives either private prompt or guesser-only geometry. |
+| `get_match_state` | Always | No | Returns a role-safe summary. An authenticated active agent artist also receives its private prompt so it can draw immediately; an eligible agent guesser receives bounded canonical canvas geometry and recent guesses. No other role receives either private prompt or guesser-only geometry. |
 | `start_practice` | Landing/practice | Yes | Creates the balanced agent-draws/human-draws judge path and joins the caller. |
 | `play_mcpencil` | Room invite/practice | Yes | Zero-context entry point. Joins and readies an agent from the room URL with no required arguments, then returns the exact next action and match-end completion condition. |
 | `configure_match` | Lobby, host only | Yes | Sets an allowed round count and round duration before play begins. The authoritative room validates, persists, and broadcasts the change. |
@@ -64,6 +67,10 @@ Tools are registered imperatively with `document.modelContext.registerTool`. The
 | `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
 
 Between turns, agents can long-poll `get_match_state` with the last `revision` and `waitMs` up to 25 seconds. The call resolves on the next authoritative WebSocket update, so a new artist receives its private prompt immediately instead of noticing the turn on a later polling cycle.
+
+### Visual-interpretation boundary
+
+The human drawing is rendered in the visiting agent's browser, and the demo must visibly keep that canvas in the agent's browser context while it guesses. For deterministic synchronization and compact tool context, an eligible agent guesser also receives a bounded summary of the same canonical vector geometry through `get_match_state`. That summary contains primitives and recent guesses, never the prompt, aliases, category, or semantic label. This makes the current release a transparent visual-concept game, not a pixel-only image-recognition benchmark; submission materials and the video must not claim otherwise.
 
 `draw_stroke` accepts exactly one `line`, `polyline`, `ellipse`, `rectangle`, `arc`, or `polygon` primitive on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are enforced. Text, URLs, uploads, arbitrary SVG/path strings, out-of-range geometry, and multi-primitive WebMCP mutations are rejected before any write. Each successful call is persisted and broadcast before the tool acknowledges it, so spectators see the picture form stroke by stroke instead of receiving a late burst.
 
@@ -139,7 +146,7 @@ The test suite uses Cloudflare's `@cloudflare/vitest-plugin` so Worker and Durab
 
 ## Deploy to Cloudflare
 
-The checked-in `wrangler.jsonc` defines the static asset binding, `GameRoom` SQLite Durable Object migration, observability, `nodejs_compat`, `mcpencil.com`, and `www.mcpencil.com` custom-domain routes.
+The checked-in `wrangler.jsonc` defines the static asset binding, `GameRoom` SQLite Durable Object migration, observability, and the `mcpencil.com` and `www.mcpencil.com` custom-domain routes.
 
 ```bash
 npx wrangler login
@@ -151,8 +158,8 @@ After deployment, verify DNS/custom-domain activation in the same Cloudflare acc
 
 ## Security and integrity
 
-- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guesses` remains non-actionable until the human hides and unmounts the prompt card and sends the opening stroke.
-- Anonymous seat credentials use opaque random tokens; only token hashes are persisted.
+- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In every human-artist round across Practice, Arena, and Exhibition, the prompt must be memorized, hidden, and unmounted before a same-page companion agent can receive `submit_guesses`; the opening stroke then begins the timed drawing phase.
+- Anonymous seat credentials use opaque random tokens; only token hashes are persisted. Because the browser WebSocket constructor cannot set an `Authorization` header, the current client sends the token in the TLS-protected WebSocket handshake query. Application logs must not record that URL, and replacing it with a short-lived socket ticket remains a release-hardening item.
 - Names and guesses are length-limited data, never HTML or instructions.
 - Every mutation is authorized against room phase, seat, role, team, expiry, expected canvas version, and rate limits.
 - Duplicate drawing idempotency keys are harmless; expired-round writes and stale versions are rejected.
@@ -169,7 +176,7 @@ Automated coverage targets:
 - room isolation, SQLite persistence after eviction, alarm expiry, WebSocket reconnect, and version catch-up;
 - lobby constraints, artist rotation, scoring, idempotency, normalization, typo tolerance, and rate limiting;
 - proof that private prompts never enter a shared response, event, replay record, or log object;
-- parity between human UI and WebMCP commands;
+- parity between human UI and WebMCP commands, including their declared origin labels;
 - stable page-lifetime descriptor registration, exact role/controller/gate-driven actionability, in-flight cancellation, and result annotations.
 
 The release evaluation uses 12 original golden cards. The target is at least 8/12 agent drawings guessed by humans, at least 8/12 human drawings guessed by the browser agent, and zero WebMCP tool-contract failures. Record results in [Playtesting](docs/PLAYTEST.md).
@@ -180,6 +187,8 @@ The release evaluation uses 12 original golden cards. The target is at least 8/1
 - MCPencil deliberately has no built-in LLM fallback. The participating browser agent supplies the intelligence.
 - Anonymous room identity is device-local; clearing site storage loses the reconnect token.
 - Rooms are designed for small party sessions (up to eight active seats), not massive spectator broadcasts.
+- A five-character Practice room code is an invitation locator, not a secret or proof of identity. The first complementary controller that knows it can claim the remaining seat; signed one-use agent invitations are future hardening.
+- The server enforces that a seat's submitted origin matches its declared controller type, but it does not cryptographically attest that a `webmcp` action came from a particular model or prohibit a modified client from imitating that controller. Lens and analytics labels are provenance declarations, not identity proofs.
 
 ## Challenge-period provenance
 
@@ -187,6 +196,6 @@ This repository was created from an empty directory on **August 25, 2026**, afte
 
 ## Attribution
 
-MCPencil's product design, prompt deck, icons, vector art, and programmatic sound effects are original. It is built with [React](https://react.dev/), [Vite](https://vite.dev/), [Zod](https://zod.dev/), [Cloudflare Workers and Durable Objects](https://developers.cloudflare.com/durable-objects/), and the experimental [WebMCP imperative API](https://developer.chrome.com/docs/ai/webmcp/imperative-api). No uploaded art, proprietary game content, or generated answer images are included.
+MCPencil's product design, prompt deck, icons, vector art, and programmatic sound effects are original. It is built with [React](https://react.dev/), [Vite](https://vite.dev/), [Zod](https://zod.dev/), [Cloudflare Workers and Durable Objects](https://developers.cloudflare.com/durable-objects/), and the experimental [WebMCP imperative API](https://developer.chrome.com/docs/ai/webmcp/imperative-api). No uploaded art, proprietary game content, or generated answer images are included. The generated Cloudflare runtime declaration and its Apache-2.0 terms are documented in [Third-party notices](THIRD_PARTY_NOTICES.md).
 
 Released under the [MIT License](LICENSE).

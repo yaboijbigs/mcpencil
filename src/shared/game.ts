@@ -27,8 +27,11 @@ export type StrokeWidth = (typeof STROKE_WIDTHS)[number];
 export type RoomMode = "practice" | "arena" | "exhibition";
 export type MatchPhase = "lobby" | "round-prep" | "drawing" | "round-end" | "match-end";
 
-const Coordinate = z.number().finite().min(0).max(1000);
-const Radius = z.number().finite().min(1).max(1000);
+const XCoordinate = z.number().finite().min(0).max(CANVAS_WIDTH);
+const YCoordinate = z.number().finite().min(0).max(CANVAS_HEIGHT);
+const HorizontalExtent = z.number().finite().min(1).max(CANVAS_WIDTH);
+const VerticalExtent = z.number().finite().min(1).max(CANVAS_HEIGHT);
+const ArcRadius = z.number().finite().min(1).max(Math.min(CANVAS_WIDTH, CANVAS_HEIGHT) / 2);
 const PaletteSchema = z.enum(PALETTE);
 const StrokeWidthSchema = z.union([
   z.literal(3),
@@ -37,7 +40,7 @@ const StrokeWidthSchema = z.union([
   z.literal(12),
   z.literal(20),
 ]);
-const PointSchema = z.object({ x: Coordinate, y: Coordinate }).strict();
+const PointSchema = z.object({ x: XCoordinate, y: YCoordinate }).strict();
 const PrimitiveStyleSchema = z.object({
   color: PaletteSchema,
   width: StrokeWidthSchema,
@@ -46,47 +49,149 @@ const PrimitiveStyleSchema = z.object({
 
 export const LinePrimitiveSchema = PrimitiveStyleSchema.extend({
   type: z.literal("line"),
-  x1: Coordinate,
-  y1: Coordinate,
-  x2: Coordinate,
-  y2: Coordinate,
-}).strict();
+  x1: XCoordinate,
+  y1: YCoordinate,
+  x2: XCoordinate,
+  y2: YCoordinate,
+}).strict().superRefine((primitive, context) => {
+  if (primitive.x1 === primitive.x2 && primitive.y1 === primitive.y2) {
+    context.addIssue({
+      code: "custom",
+      path: ["x2"],
+      message: "A line must have two different endpoints.",
+    });
+  }
+});
 
 export const PolylinePrimitiveSchema = PrimitiveStyleSchema.extend({
   type: z.literal("polyline"),
   points: z.array(PointSchema).min(2).max(48),
-}).strict();
+}).strict().superRefine((primitive, context) => {
+  if (!hasDistinctPoints(primitive.points)) {
+    context.addIssue({
+      code: "custom",
+      path: ["points"],
+      message: "A polyline must contain at least two different points.",
+    });
+  }
+});
 
 export const EllipsePrimitiveSchema = PrimitiveStyleSchema.extend({
   type: z.literal("ellipse"),
-  cx: Coordinate,
-  cy: Coordinate,
-  rx: Radius,
-  ry: Radius,
-}).strict();
+  cx: XCoordinate,
+  cy: YCoordinate,
+  rx: HorizontalExtent,
+  ry: VerticalExtent,
+}).strict().superRefine((primitive, context) => {
+  if (primitive.cx - primitive.rx < 0 || primitive.cx + primitive.rx > CANVAS_WIDTH) {
+    context.addIssue({
+      code: "custom",
+      path: ["rx"],
+      message: `Ellipse horizontal extent must stay within 0-${CANVAS_WIDTH}.`,
+    });
+  }
+  if (primitive.cy - primitive.ry < 0 || primitive.cy + primitive.ry > CANVAS_HEIGHT) {
+    context.addIssue({
+      code: "custom",
+      path: ["ry"],
+      message: `Ellipse vertical extent must stay within 0-${CANVAS_HEIGHT}.`,
+    });
+  }
+});
 
 export const RectanglePrimitiveSchema = PrimitiveStyleSchema.extend({
   type: z.literal("rectangle"),
-  x: Coordinate,
-  y: Coordinate,
-  rectWidth: Radius,
-  rectHeight: Radius,
+  x: XCoordinate,
+  y: YCoordinate,
+  rectWidth: HorizontalExtent,
+  rectHeight: VerticalExtent,
   radius: z.number().finite().min(0).max(100).optional(),
-}).strict();
+}).strict().superRefine((primitive, context) => {
+  if (primitive.x + primitive.rectWidth > CANVAS_WIDTH) {
+    context.addIssue({
+      code: "custom",
+      path: ["rectWidth"],
+      message: `Rectangle horizontal extent must stay within 0-${CANVAS_WIDTH}.`,
+    });
+  }
+  if (primitive.y + primitive.rectHeight > CANVAS_HEIGHT) {
+    context.addIssue({
+      code: "custom",
+      path: ["rectHeight"],
+      message: `Rectangle vertical extent must stay within 0-${CANVAS_HEIGHT}.`,
+    });
+  }
+});
 
 export const ArcPrimitiveSchema = PrimitiveStyleSchema.extend({
   type: z.literal("arc"),
-  cx: Coordinate,
-  cy: Coordinate,
-  radius: Radius,
+  cx: XCoordinate,
+  cy: YCoordinate,
+  radius: ArcRadius,
   startAngle: z.number().finite().min(-360).max(360),
   endAngle: z.number().finite().min(-360).max(720),
-}).strict();
+}).strict().superRefine((primitive, context) => {
+  if (primitive.cx - primitive.radius < 0 || primitive.cx + primitive.radius > CANVAS_WIDTH) {
+    context.addIssue({
+      code: "custom",
+      path: ["radius"],
+      message: `Arc horizontal extent must stay within 0-${CANVAS_WIDTH}.`,
+    });
+  }
+  if (primitive.cy - primitive.radius < 0 || primitive.cy + primitive.radius > CANVAS_HEIGHT) {
+    context.addIssue({
+      code: "custom",
+      path: ["radius"],
+      message: `Arc vertical extent must stay within 0-${CANVAS_HEIGHT}.`,
+    });
+  }
+  if (Math.abs(primitive.endAngle - primitive.startAngle) % 360 === 0) {
+    context.addIssue({
+      code: "custom",
+      path: ["endAngle"],
+      message: "An arc must have distinct endpoints; use an ellipse for a full circle.",
+    });
+  }
+});
 
 export const PolygonPrimitiveSchema = PrimitiveStyleSchema.extend({
   type: z.literal("polygon"),
   points: z.array(PointSchema).min(3).max(24),
-}).strict();
+}).strict().superRefine((primitive, context) => {
+  if (distinctPointCount(primitive.points) < 3) {
+    context.addIssue({
+      code: "custom",
+      path: ["points"],
+      message: "A polygon must contain at least three different points.",
+    });
+  } else if (!hasNonZeroPolygonArea(primitive.points)) {
+    context.addIssue({
+      code: "custom",
+      path: ["points"],
+      message: "A polygon's points must not all be collinear.",
+    });
+  }
+});
+
+function hasDistinctPoints(points: ReadonlyArray<{ x: number; y: number }>): boolean {
+  const first = points[0];
+  return first !== undefined && points.some((point) => point.x !== first.x || point.y !== first.y);
+}
+
+function distinctPointCount(points: ReadonlyArray<{ x: number; y: number }>): number {
+  return new Set(points.map((point) => `${point.x},${point.y}`)).size;
+}
+
+function hasNonZeroPolygonArea(points: ReadonlyArray<{ x: number; y: number }>): boolean {
+  let twiceSignedArea = 0;
+  for (let index = 0; index < points.length; index += 1) {
+    const current = points[index];
+    const next = points[(index + 1) % points.length];
+    if (current === undefined || next === undefined) return false;
+    twiceSignedArea += current.x * next.y - next.x * current.y;
+  }
+  return twiceSignedArea !== 0;
+}
 
 export const PrimitiveSchema = z.discriminatedUnion("type", [
   LinePrimitiveSchema,

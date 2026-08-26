@@ -1,5 +1,7 @@
 # Demo script — target 2:40
 
+**Status: future required deliverable. No demo video has been recorded or published yet.** The final challenge entry needs a public YouTube video with audible English narration (or equivalent English audio), under three minutes. This file is only the recording plan.
+
 The video should be one continuous argument: WebMCP turns a website into a place where people bring their own agents as real participants. Record at 1440p or 1080p with a large cursor, 125% browser zoom if needed, and no private notifications. Keep the live app URL visible early and the public repository URL visible at the end.
 
 ## Pre-recording setup
@@ -10,7 +12,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 - Pre-size the WebMCP Lens so tool names and results are readable at video resolution.
 - Open a second human browser only if the practiced flow needs it; hide unrelated tabs.
 - Clear rooms, stale credentials, console errors, notifications, autofill, and personal account details.
-- Record clean game sound on one audio track and narration on another when possible.
+- Record clean original/programmatic game sound on one audio track and narration on another when possible. Use no unlicensed music, sound effect, artwork, logo, or third-party game footage.
 - Have one uninterrupted backup take before experimenting with faster edits.
 
 ## Shot-by-shot script
@@ -39,7 +41,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 0:40–1:05 — agent draws, human guesses
 
-**Picture:** Agent reads its role-safe state, then immediately calls `draw_stroke` several times. Keep the Lens and canvas together so every acknowledgement visibly precedes the next stroke. Enter the correct human guess before time expires; show points.
+**Picture:** Agent reads its role-safe state, then immediately calls `draw_stroke` several times. Keep the Lens and canvas together so every call, returned canvas version, and separately rendered stroke can be followed. Enter the correct human guess before time expires; show points.
 
 **Narration:** “The secret answer goes only to the active artist. The agent cannot ask to ‘draw it.’ It must compose bounded lines, shapes, and polygons on a normalized canvas. The server checks role, time, version, rate, and idempotency before committing and broadcasting every stroke.”
 
@@ -51,15 +53,15 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 **Narration:** “Now the exact same room reverses direction. Artist actions are revoked, guessing unlocks, and the agent never receives the answer.”
 
-### 1:20–1:45 — human draws, agent guesses visually
+### 1:20–1:45 — human draws, agent interprets the canvas
 
-**Picture:** Human uses pen plus one shape control. Agent inspects the visible canvas, calls `submit_guesses`, and lands the answer. Keep its full visible guess trail on screen, then show the same transcript in the final replay.
+**Picture:** Human uses pen plus one shape control. Keep the rendered canvas visible in the visiting agent's browser context. Show `get_match_state` transparently returning the bounded canonical geometry (and no prompt), then show the agent call `submit_guesses` and land the answer. Keep its full visible guess trail on screen, then show the same transcript in the final replay. Do not edit around the geometry field or imply this is a pixel-only evaluation.
 
-**Narration:** “I draw with pointer controls. The agent must interpret what it can actually see and submit a normal, rate-limited guess through WebMCP. There is no hosted model, API key, bot OAuth, or DOM automation inside MCPencil.”
+**Narration:** “I draw with pointer controls. The agent follows the rendered picture and a bounded summary of its canonical geometry, then submits a normal, rate-limited guess through WebMCP. The prompt and its aliases never enter guesser state. There is no hosted model, API key, bot OAuth, or DOM automation inside MCPencil.”
 
 ### 1:45–2:03 — mixed-team arena and Lens
 
-**Picture:** Fast cut to a prepared Team Arena lobby and active mixed teams. Show controller icons plus non-color team patterns, artist rotation, and a live spectator view. Pan the Lens across human and WebMCP provenance entries.
+**Picture:** Fast cut to a prepared Team Arena lobby and active mixed teams. Show controller icons plus non-color team patterns, artist rotation, and a live spectator view. Pan the Lens across declared human and WebMCP origin entries.
 
 **Narration:** “Practice proves the loop; Team Arena scales it to mixed teams, humans versus agents, or even agent versus agent. The Lens makes invisible integration quality judgeable without exposing model reasoning.”
 
@@ -90,7 +92,9 @@ The video should be one continuous argument: WebMCP turns a website into a place
 3. Show the private prompt only when the agent/human artist is authorized; never reveal the answer early to a guesser.
 4. Put subtitles on every narration line and verify spelling of WebMCP, Durable Objects, and MCPencil.
 5. Keep third-party product UI brief and functional. The project UI, behavior, and evidence should dominate the frame.
-6. Export to 2:35–2:45, confirm the uploaded YouTube duration is below 3:00, and watch the public upload once at normal speed.
+6. Be explicit that guesser state includes bounded canonical geometry; demonstrate the visible browser canvas, but do not call the current release a pixel-only vision benchmark.
+7. Use only original/programmatic audio or properly licensed material with recorded attribution; silence is preferable to unlicensed music.
+8. Export to 2:35–2:45, confirm the uploaded YouTube duration is below 3:00, and watch the public upload once at normal speed with audio enabled.
 
 ## Pickup list
 
@@ -104,4 +108,4 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ## Final truth check
 
-Every claim in narration must be demonstrable in the tagged public release. If a fallback or planned feature is not functioning on recording day, remove that claim instead of simulating it.
+Every claim in narration must be demonstrable in the tagged public release. If a fallback or planned feature is not functioning on recording day, remove that claim instead of simulating it. Before submission, verify the public video is under three minutes, has audible English narration, shows the real bidirectional WebMCP flow, and corresponds to the exact deployed/tagged release.

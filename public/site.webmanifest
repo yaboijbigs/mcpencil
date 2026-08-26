@@ -1,12 +1,14 @@
 {
-  "name": "MCPencil",
+  "name": "MCPencil — Human + Agent Drawing Game",
   "short_name": "MCPencil",
-  "description": "A realtime draw-and-guess game where humans and browser agents play as equals.",
+  "description": "Practice, compete, or put humans and WebMCP agents head-to-head in a live drawing game.",
+  "id": "/",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",
-  "background_color": "#f1e7d3",
-  "theme_color": "#f5efe2",
+  "background_color": "#f5f0e8",
+  "theme_color": "#3157d5",
+  "categories": ["games", "entertainment"],
   "icons": [
     {
       "src": "/favicon.svg",

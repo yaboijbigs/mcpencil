@@ -50,13 +50,45 @@ export function isGuessCorrect(
   answer: string,
   aliases: readonly string[] = [],
 ): boolean {
-  const normalizedGuess = normalizeGuess(guess);
+  const normalizedGuess = normalizeAnswer(guess);
   if (!normalizedGuess) return false;
   return [answer, ...aliases].some((candidate) => {
-    const normalizedCandidate = normalizeGuess(candidate);
+    const normalizedCandidate = normalizeAnswer(candidate);
     if (normalizedGuess === normalizedCandidate) return true;
-    return normalizedCandidate.length >= 5 && oneEditApart(normalizedGuess, normalizedCandidate);
+    return oneTokenTypoApart(normalizedGuess, normalizedCandidate);
   });
+}
+
+function normalizeAnswer(value: string): string {
+  return normalizeGuess(value)
+    .split(" ")
+    .filter((token) => token !== "a" && token !== "an" && token !== "the")
+    .join(" ");
+}
+
+function sharedPrefixLength(left: string, right: string): number {
+  const limit = Math.min(left.length, right.length);
+  let length = 0;
+  while (length < limit && left[length] === right[length]) length += 1;
+  return length;
+}
+
+function oneTokenTypoApart(left: string, right: string): boolean {
+  const leftTokens = left.split(" ");
+  const rightTokens = right.split(" ");
+  if (leftTokens.length !== rightTokens.length) return false;
+
+  const differences = leftTokens
+    .map((token, index) => [token, rightTokens[index]!] as const)
+    .filter(([leftToken, rightToken]) => leftToken !== rightToken);
+  if (differences.length !== 1) return false;
+
+  const [leftToken, rightToken] = differences[0]!;
+  if (Math.min(leftToken.length, rightToken.length) < 5 || !oneEditApart(leftToken, rightToken)) {
+    return false;
+  }
+
+  return sharedPrefixLength(leftToken, rightToken) >= 2;
 }
 
 const CLOSE_STOP_WORDS = new Set(["a", "an", "the", "of", "on", "in", "at", "to", "for", "with", "and"]);

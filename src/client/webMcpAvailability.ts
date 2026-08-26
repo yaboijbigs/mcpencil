@@ -152,8 +152,8 @@ export function compactWebMcpState(
     canvasGeometry,
     recentGuesses,
     guidance: canvasGeometry.length > 0
-      ? "Visually inspect the rendered canvas now. Submit 1-3 ordered, distinct candidates immediately. Reconsider the whole drawing on every newer canvasVersion and do not repeat recentGuesses."
-      : "Keep get_match_state pending for the first geometry. Visually inspect the rendered canvas and submit candidates immediately when it arrives.",
+      ? "Inspect the rendered canvas together with this bounded canonical canvasGeometry. Submit 1-3 ordered, distinct candidates immediately. Reconsider the whole drawing on every newer canvasVersion and do not repeat recentGuesses."
+      : "Keep get_match_state pending for the first geometry. Inspect the rendered canvas and disclosed canvasGeometry, then submit candidates immediately when it arrives.",
   };
 }
 
@@ -213,7 +213,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
     return {
       nextAction: {
         tool: "draw_stroke",
-        instruction: "Do not narrate or plan the full drawing. Send ONE high-information stroke now, then immediately send the next stroke after its acknowledgement.",
+        instruction: "Send ONE high-information stroke now using X 0-1000 and Y 0-700, with every ellipse/rectangle/arc extent fully visible. Do not narrate or plan the full drawing; immediately send the next stroke after acknowledgement.",
       },
       urgency: "immediate",
     };
@@ -222,7 +222,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
     return {
       nextAction: {
         tool: "submit_guesses",
-        instruction: "Visually inspect the rendered canvas and immediately submit 1-3 ordered, distinct candidates; reconsider after every canvasVersion change.",
+        instruction: "Visually inspect the rendered canvas together with the disclosed bounded canvasGeometry, then immediately submit 1-3 ordered, distinct candidates; reconsider after every canvasVersion change.",
       },
       urgency: "immediate",
     };
@@ -246,7 +246,15 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
 export function compactWebMcpRoundResult(snapshot: RoomSnapshot) {
   const result = snapshot.roundResult;
   if (result === null) return null;
-  if (snapshot.mode !== "practice") return result;
+  const guessTranscript = snapshot.guesses
+    .filter((event) => event.roundIndex === result.roundIndex)
+    .map(({ displayName, guess, origin, isCorrect }) => ({
+      player: displayName,
+      guess,
+      provenance: origin,
+      correct: isCorrect,
+    }));
+  if (snapshot.mode !== "practice") return { ...result, guessTranscript };
   return {
     round: result.roundIndex + 1,
     prompt: result.prompt,
@@ -258,6 +266,7 @@ export function compactWebMcpRoundResult(snapshot: RoomSnapshot) {
     elapsedMs: result.elapsedMs,
     strokeCount: result.strokeCount,
     toolCallCount: result.toolCallCount,
+    guessTranscript,
     competitive: false,
     instruction: "This was a collaborative Practice Pair round; do not describe its team or points as a competitive score.",
   };

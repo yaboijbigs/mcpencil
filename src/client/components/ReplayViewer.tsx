@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CanvasEvent, GuessEvent, MatchAnalytics, RoundResult } from "../../shared/game";
 import type { ReplayPayload } from "../api";
+import { summarizeReplayRound } from "../replayStats";
 import { PrimitiveMark } from "./CanvasBoard";
 import { BotIcon, CheckIcon, ReplayIcon } from "./Icons";
 
@@ -44,11 +45,11 @@ export function ReplayViewer({
       .sort((left, right) => left.createdAt - right.createdAt),
     [guesses, replayData, selectedRound],
   );
-  const agentGuessCount = roundGuesses.filter((guess) => guess.origin === "webmcp").length;
-  const humanGuessCount = roundGuesses.length - agentGuessCount;
-  const agentDrawCallCount = new Set(
-    ordered.filter((event) => event.origin === "webmcp").map((event) => event.batchId),
-  ).size;
+  const roundSummary = useMemo(
+    () => summarizeReplayRound(roundEvents, roundGuesses, selectedRound),
+    [roundEvents, roundGuesses, selectedRound],
+  );
+  const matchAnalytics = replayData?.analytics ?? analytics;
   const [visible, setVisible] = useState(ordered.length);
   const [playing, setPlaying] = useState(false);
 
@@ -75,7 +76,7 @@ export function ReplayViewer({
   };
 
   if (loading && !replayData) {
-    return <section className="replay-panel replay-status-panel" aria-busy="true"><span className="button-spinner" /><div><span className="eyebrow">Loading canonical event log</span><h2>Assembling every drawing and guess…</h2><p>The final scoreboard is ready; the full replay is catching up.</p></div></section>;
+    return <section className="replay-panel replay-status-panel" aria-busy="true"><span className="button-spinner" /><div><span className="eyebrow">Opening the match sketchbook</span><h2>Gathering every mark and guess…</h2><p>The score is ready. The server-authoritative replay is catching up.</p></div></section>;
   }
 
   if (error && !replayData) {
@@ -83,45 +84,60 @@ export function ReplayViewer({
   }
 
   return (
-    <section className="replay-panel">
-      <div className="section-heading">
-        <div><span className="eyebrow">Canonical event log</span><h2>Watch the idea appear</h2></div>
+    <section className="replay-panel match-sketchbook">
+      <div className="section-heading replay-heading">
+        <div className="replay-heading-copy">
+          <span className="eyebrow">Match sketchbook · Round {selectedRound + 1}</span>
+          <h2>Replay the handoff</h2>
+          <p>Every mark and guess keeps its human or WebMCP provenance.</p>
+        </div>
         <div className="replay-actions">
-          {replayData && replayData.rounds.length > 1 ? <label><span className="sr-only">Replay round</span><select value={selectedRound} onChange={(event) => setSelectedRound(Number(event.target.value))}>{replayData.rounds.map((round) => <option value={round.roundIndex} key={round.roundIndex}>Round {round.roundIndex + 1}</option>)}</select></label> : null}
+          {replayData && replayData.rounds.length > 1 ? <label className="replay-round-picker"><span>Round</span><select aria-label="Replay round" value={selectedRound} onChange={(event) => setSelectedRound(Number(event.target.value))}>{replayData.rounds.map((round) => <option value={round.roundIndex} key={round.roundIndex}>Round {round.roundIndex + 1}</option>)}</select></label> : null}
           <button className="secondary-button" type="button" onClick={replayRound} disabled={!ordered.length}><ReplayIcon /> Replay round</button>
         </div>
       </div>
       <div className="replay-grid">
-        <div className="replay-canvas-wrap">
-          <svg viewBox="0 0 1000 700" className="replay-canvas" aria-label="Round replay">
-            <rect width="1000" height="700" rx="18" fill="#fffdf7" />
-            {ordered.slice(0, visible).map((event) => <PrimitiveMark key={event.id} primitive={event.primitive} origin={event.origin} />)}
-          </svg>
-          <div className="replay-scrubber">
-            <input type="range" min="0" max={Math.max(1, ordered.length)} value={visible} onChange={(event) => { setPlaying(false); setVisible(Number(event.target.value)); }} aria-label="Replay position" />
-            <span>{visible} / {ordered.length} strokes</span>
+        <div className="replay-canvas-column">
+          <div className="replay-canvas-wrap">
+            <span className="replay-tape" aria-hidden="true" />
+            <svg viewBox="0 0 1000 700" className="replay-canvas" role="img" aria-labelledby={`replay-title-${selectedRound}`}>
+              <title id={`replay-title-${selectedRound}`}>Round {selectedRound + 1} drawing replay</title>
+              <rect width="1000" height="700" rx="18" fill="#fffdf7" />
+              {ordered.slice(0, visible).map((event) => <PrimitiveMark key={event.id} primitive={event.primitive} origin={event.origin} />)}
+            </svg>
+            <div className="replay-scrubber">
+              <input type="range" min="0" max={Math.max(1, ordered.length)} value={visible} disabled={!ordered.length} onChange={(event) => { setPlaying(false); setVisible(Number(event.target.value)); }} aria-label="Replay position" />
+              <span>{visible} / {ordered.length} marks</span>
+            </div>
+          </div>
+          <div className="replay-origin-key" aria-label="Drawing provenance">
+            <span className="provenance-chip is-agent"><BotIcon /> WebMCP agent <strong>{roundSummary.agentDrawingMarks} marks</strong></span>
+            <span className="provenance-chip is-human"><span aria-hidden="true">H</span> Human UI <strong>{roundSummary.humanDrawingMarks} marks</strong></span>
           </div>
         </div>
-        <div className="analytics-grid">
-          <StatCard label="Answer" value={selected?.prompt ?? result?.prompt ?? "—"} accent />
-          <StatCard label="Time to guess" value={selected ? `${((selected.endedAt - selected.startedAt) / 1000).toFixed(1)}s` : result ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"} />
-          <StatCard label="Vector strokes" value={String(selected ? ordered.length : result?.strokeCount ?? analytics.totalStrokes)} />
-          <StatCard label="Agent round moves" value={String(selected ? agentDrawCallCount + agentGuessCount : result?.toolCallCount ?? analytics.totalToolCalls)} />
-          <StatCard label="Human actions" value={String(analytics.byOrigin["human-ui"])} />
-          <StatCard label="WebMCP actions" value={String(analytics.byOrigin.webmcp)} />
-          <StatCard label="All guesses" value={String(roundGuesses.length)} />
-          <StatCard label="Agent guesses" value={String(agentGuessCount)} />
-          <StatCard label="Human guesses" value={String(humanGuessCount)} />
-        </div>
+        <aside className="replay-scorecard" aria-label={`Round ${selectedRound + 1} scorecard`}>
+          <header><span>Round card</span><strong>#{selectedRound + 1}</strong></header>
+          <div className="analytics-grid">
+            <StatCard label="Answer" value={selected?.prompt ?? result?.prompt ?? "—"} accent />
+            <StatCard label="Time to solve" value={selected ? `${(Math.max(0, selected.endedAt - selected.startedAt) / 1000).toFixed(1)}s` : result ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"} note="this round" />
+            <StatCard label="Vector marks" value={String(replayData ? roundSummary.vectorMarks : (result?.strokeCount ?? roundSummary.vectorMarks))} note="this round" />
+            <StatCard label="All guesses" value={String(roundSummary.allGuesses)} note="this round" />
+            <StatCard label="Agent drawing moves" value={String(roundSummary.agentDrawingMoves)} note={`${roundSummary.agentDrawingMarks} vector marks`} provenance="agent" />
+            <StatCard label="Agent guesses" value={String(roundSummary.agentGuesses)} note="via WebMCP" provenance="agent" />
+            <StatCard label="Human UI actions" value={String(roundSummary.humanUiActions)} note="draw moves + guesses" provenance="human" />
+            <StatCard label="Server-recorded WebMCP actions" value={String(matchAnalytics.totalToolCalls)} note="accepted room mutations · whole match" provenance="agent" />
+          </div>
+          <p className="replay-scorecard-note">Round provenance comes from accepted canvas and guess events. Tool calls come from the server activity log.</p>
+        </aside>
         <section className="replay-guess-history" aria-label={`Every guess from round ${selectedRound + 1}`}>
-          <header><div><span className="eyebrow">Complete guess log</span><h3>Every guess</h3></div><span>{roundGuesses.length}</span></header>
+          <header><div><span className="eyebrow">Guess cards · Round {selectedRound + 1}</span><h3>Every attempt, in order</h3></div><span aria-label={`${roundGuesses.length} guesses`}>{roundGuesses.length}</span></header>
           <div className="replay-guess-list">
-            {roundGuesses.map((guess) => <article key={guess.id} className={guess.isCorrect ? "is-correct" : ""}>
+            {roundGuesses.map((guess) => <article key={guess.id} className={`${guess.isCorrect ? "is-correct " : ""}origin-${guess.origin}`}>
               <span className={`replay-guess-avatar ${guess.origin === "webmcp" ? "agent" : "human"}`}>{guess.origin === "webmcp" ? <BotIcon /> : guess.displayName.slice(0, 1).toUpperCase()}</span>
-              <div><strong>{guess.displayName}</strong><small>{guess.origin === "webmcp" ? "via WebMCP" : "human"} · {formatGuessElapsed(guess.createdAt, selected?.startedAt)}</small><p>{guess.guess}</p></div>
+              <div><strong>{guess.displayName}</strong><small className="guess-provenance">{guess.origin === "webmcp" ? "WebMCP agent" : "Human UI"} · {formatGuessElapsed(guess.createdAt, selected?.startedAt)}</small><p>{guess.guess}</p></div>
               {guess.isCorrect ? <span className="replay-correct"><CheckIcon /> Correct</span> : null}
             </article>)}
-            {roundGuesses.length === 0 ? <p className="replay-no-guesses">No accepted guesses in this round.</p> : null}
+            {roundGuesses.length === 0 ? <p className="replay-no-guesses">No guesses were submitted in this round.</p> : null}
           </div>
         </section>
       </div>
@@ -134,6 +150,18 @@ function formatGuessElapsed(createdAt: number, startedAt?: number) {
   return `+${(Math.max(0, createdAt - startedAt) / 1000).toFixed(1)}s`;
 }
 
-function StatCard({ label, value, accent = false }: { label: string; value: string; accent?: boolean }) {
-  return <article className={`stat-card ${accent ? "is-accent" : ""}`}><small>{label}</small><strong>{value}</strong></article>;
+function StatCard({
+  label,
+  value,
+  accent = false,
+  note,
+  provenance,
+}: {
+  label: string;
+  value: string;
+  accent?: boolean;
+  note?: string;
+  provenance?: "agent" | "human";
+}) {
+  return <article className={`stat-card ${accent ? "is-accent" : ""} ${provenance ? `is-${provenance}` : ""}`}><small>{label}</small><strong>{value}</strong>{note ? <span>{note}</span> : null}</article>;
 }

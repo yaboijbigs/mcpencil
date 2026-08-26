@@ -33,11 +33,11 @@ The project began with a funny slip—we called the idea “agentic charades” 
 
 MCPencil is a realtime team draw-and-guess game in which human and agent seats share one game engine.
 
-In the hero **Practice Pair** flow, a human creates a room that waits for a browser agent to join. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted, broadcast, and visible before the next call. Then the roles reverse: the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the host-configured clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP.
+In the hero **Practice Pair** flow, a human creates a room that waits for a browser agent to join. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted and broadcast before acknowledgement, then animates as clients receive it. Then the roles reverse: the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the host-configured clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP. The guesser sees the rendered canvas plus bounded canonical vector geometry, never the prompt, aliases, category, or a semantic label; MCPencil does not claim this is a pixel-only vision benchmark.
 
 **Team Arena** runs a host-configured 4, 6, or 8 timed rounds with two mixed teams. **Exhibition** uses the same seats for humans-versus-agents or agent-versus-agent matches. Practice supports 2, 4, or 6 balanced rounds, and every mode supports 45, 60, or 90 seconds per round. Scoring, artist rotation, realtime synchronization, reconnects, replay, and post-match analytics are server-authoritative.
 
-A judge-facing **WebMCP Lens** shows the exact tools actionable for the current role and phase, safe call summaries, results, timing, canvas versions, and whether each action came from the human UI or WebMCP. Private prompts remain masked.
+A judge-facing **WebMCP Lens** shows the exact tools actionable for the current role and phase, safe call summaries, results, timing, canvas versions, and each seat's declared human-UI or WebMCP origin. This origin is useful provenance, not cryptographic model attestation. Private prompts remain masked.
 
 ## How we built it
 
@@ -52,9 +52,9 @@ We do not call an LLM API and do not ship a built-in bot. The intelligence belon
 WebMCP is the player-control layer, not a convenience feature.
 
 - `start_practice` and the zero-context `play_mcpencil` room-invite tool let agents become authenticated game participants without an MCPencil-specific skill or prior conversation.
-- Lobby tools let an agent ready its own seat, configure an agent-hosted match, and let only the host start an eligible match.
-- `draw_stroke` and `undo_last_stroke` become actionable only for the current agent artist and are revoked immediately when the role rotates. Its private prompt is included only in its role-safe `get_match_state` result.
-- A guesser receives `submit_guesses`, but never the private prompt or artist mutations; up to three ordered candidates become distinct visible room guesses.
+- Agent seats ready automatically on join; an agent host can configure a match and only the host can start an eligible team match.
+- `draw_stroke` and `undo_last_stroke` become actionable only for the current agent artist and become non-actionable when the role rotates. Its private prompt is included only in its role-safe `get_match_state` result.
+- A guesser receives `submit_guesses`, bounded canonical geometry, and recent guesses, but never the private prompt; up to three ordered candidates become distinct visible room guesses.
 - Round-end tools reveal the result and coordinate the next round.
 - `get_match_state` is always available but always role-safe.
 
@@ -64,7 +64,7 @@ WebMCP is the player-control layer, not a convenience feature.
 
 The most interesting challenge was prompt secrecy in a collaborative browser. Tool visibility is not an authorization boundary, so the answer had to be excluded by construction from every shared snapshot, broadcast, replay record, activity entry, error, and log. Only a separately authorized artist request can access it during the round.
 
-Realtime tools introduced a second challenge: a successful tool result should mean more than “the request was sent.” MCPencil waits for the authoritative canvas version to reach the local UI before acknowledging a draw, while invocation cancellation, the current client action gate, and server authorization protect the role-transition boundary.
+Realtime tools introduced a second challenge: a successful tool result should mean more than “the request was sent.” MCPencil acknowledges a draw only after the authoritative mutation is persisted and its versioned update is broadcast, returning the accepted canvas version. Receiving browsers paint asynchronously, so the result does not claim every client has rendered it already. Invocation cancellation, the current client action gate, and server authorization protect the role-transition boundary.
 
 Long matches exposed a less obvious constraint: some browser-agent surfaces have a finite budget for tool-configuration changes. Replacing descriptors every round could exhaust it even though only a few actions were visible at once. MCPencil now keeps one stable semantic registry for the page and changes only its atomically enforced actionable set, so six- and eight-round matches remain available without weakening permissions.
 
@@ -90,8 +90,8 @@ MCPencil can grow into a public human-agent visual communication benchmark: seed
 
 | Criterion | Evidence in the build and video |
 |---|---|
-| WebMCP Leverage | Agent joins, receives a private role-safe state, draws constrained geometry, loses artist actionability on rotation, visually guesses a human drawing, and uses no model API or DOM automation. Lens makes authorization and annotations visible. |
-| Execution | Responsive SVG controls, authoritative multiplayer rooms, hibernatable realtime sync, alarms, reconnects, scoring, Practice Pair, replay, analytics, tests, and a one-minute judge path. |
+| WebMCP Leverage | Agent joins, receives a private role-safe state, draws constrained geometry, loses artist actionability on rotation, interprets the rendered canvas plus disclosed low-level geometry, and guesses through WebMCP without a model API or DOM automation. Lens makes authorization and annotations visible. |
+| Execution | Responsive SVG controls, authoritative multiplayer rooms, hibernatable realtime sync, alarms, reconnects, scoring, Practice Pair, replay, analytics, tests, and a focused judge path. |
 | Potential Impact | A legible example of bring-your-own-agent social software and a reusable visual communication evaluation surface. |
 | Creativity & Ambition | Agents communicate through low-level geometry and reverse roles to interpret human marks inside mixed, competitive realtime teams. |
 

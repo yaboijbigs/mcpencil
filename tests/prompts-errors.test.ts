@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { isGuessCorrect } from "../src/worker/guessing";
-import { PROMPT_DECK, randomPrompt } from "../src/worker/prompts";
+import { isGuessCorrect, normalizeGuess } from "../src/worker/guessing";
+import { PRACTICE_PROMPTS, PROMPT_DECK, randomPrompt } from "../src/worker/prompts";
 import {
   ApiError,
   SECURITY_HEADERS,
@@ -12,82 +12,81 @@ import {
 } from "../src/worker/errors";
 
 describe("original prompt deck", () => {
-  it("contains a substantial, uniquely named, bounded deck", () => {
-    expect(PROMPT_DECK.length).toBeGreaterThanOrEqual(36);
-    expect(new Set(PROMPT_DECK.map((card) => card.prompt)).size).toBe(PROMPT_DECK.length);
+  it("contains a large, normalized-unique deck and Practice pool", () => {
+    expect(PROMPT_DECK.length).toBeGreaterThanOrEqual(150);
+    expect(PRACTICE_PROMPTS.length).toBeGreaterThanOrEqual(100);
+    expect(PRACTICE_PROMPTS.length).toBeLessThan(PROMPT_DECK.length);
+    expect(PRACTICE_PROMPTS.every((card) => card.practiceEligible)).toBe(true);
+
+    const normalizedPrompts = PROMPT_DECK.map((card) => normalizeGuess(card.prompt));
+    expect(new Set(normalizedPrompts).size).toBe(PROMPT_DECK.length);
+
     for (const card of PROMPT_DECK) {
       expect(card.prompt.length).toBeGreaterThan(2);
       expect(card.prompt.length).toBeLessThanOrEqual(40);
       expect(card.category.length).toBeGreaterThan(0);
-      expect(card.aliases).not.toContain(card.prompt);
+      expect(card.aliases.length).toBeGreaterThan(0);
+      expect(card.rejectedAnswers.length).toBeGreaterThan(0);
     }
   });
 
-  it("selects only unused prompts and falls back only after the deck is exhausted", () => {
-    const knownPrompts = new Set(PROMPT_DECK.map((card) => card.prompt));
-    const used: string[] = [];
-    for (let index = 0; index < 6; index += 1) {
-      const selected = randomPrompt(used);
-      expect(knownPrompts.has(selected.prompt)).toBe(true);
-      expect(used).not.toContain(selected.prompt);
-      used.push(selected.prompt);
+  it("keeps every accepted spelling globally unambiguous", () => {
+    const acceptedByNormalizedValue = new Map<string, string>();
+    for (const card of PROMPT_DECK) {
+      for (const accepted of [card.prompt, ...card.aliases]) {
+        const normalized = normalizeGuess(accepted);
+        expect(normalized.length).toBeGreaterThan(0);
+        expect(
+          acceptedByNormalizedValue.get(normalized),
+          `duplicate accepted answer ${JSON.stringify(accepted)} on ${card.prompt}`,
+        ).toBeUndefined();
+        acceptedByNormalizedValue.set(normalized, card.prompt);
+      }
     }
-    expect(new Set(used)).toHaveLength(6);
-
-    const exhausted = randomPrompt(PROMPT_DECK.map((card) => card.prompt));
-    expect(knownPrompts.has(exhausted.prompt)).toBe(true);
   });
 
-  it("accepts fair variants for specific compound prompts", () => {
+  it("accepts every canonical answer and alias while rejecting every vetted near-miss", () => {
+    for (const card of PROMPT_DECK) {
+      const accepted = new Set([card.prompt, ...card.aliases].map(normalizeGuess));
+      const rejected = new Set(card.rejectedAnswers.map(normalizeGuess));
+
+      expect([...accepted].some((answer) => rejected.has(answer))).toBe(false);
+      for (const answer of [card.prompt, ...card.aliases]) {
+        expect(isGuessCorrect(answer, card.prompt, card.aliases), `${answer} -> ${card.prompt}`).toBe(true);
+      }
+      for (const answer of card.rejectedAnswers) {
+        expect(isGuessCorrect(answer, card.prompt, card.aliases), `${answer} -X-> ${card.prompt}`).toBe(false);
+      }
+    }
+  });
+
+  it("does not repeat a prompt within one room until the selected pool is exhausted", () => {
+    for (const practice of [false, true]) {
+      const pool = practice ? PRACTICE_PROMPTS : PROMPT_DECK;
+      const knownPrompts = new Set(pool.map((card) => card.prompt));
+      const used: string[] = [];
+      for (let index = 0; index < pool.length; index += 1) {
+        const selected = randomPrompt(used, practice);
+        expect(knownPrompts.has(selected.prompt)).toBe(true);
+        expect(used).not.toContain(selected.prompt);
+        used.push(selected.prompt);
+      }
+      expect(new Set(used)).toHaveLength(pool.length);
+
+      const exhausted = randomPrompt(used, practice);
+      expect(knownPrompts.has(exhausted.prompt)).toBe(true);
+    }
+  });
+
+  it("accepts sleepy turtle equivalents but requires the sleepy descriptor", () => {
     const card = (prompt: string) => PROMPT_DECK.find((candidate) => candidate.prompt === prompt)!;
-
-    const cactus = card("cactus wearing a hat");
-    expect(isGuessCorrect("cactus wearing a hat", cactus.prompt, cactus.aliases)).toBe(true);
-    expect(isGuessCorrect("a cactus wearing a cowboy hat", cactus.prompt, cactus.aliases)).toBe(true);
-
-    const dragon = card("tiny dragon");
-    expect(isGuessCorrect("dragon", dragon.prompt, dragon.aliases)).toBe(true);
-
-    const robot = card("robot watering a plant");
-    expect(isGuessCorrect("robot watering the plant", robot.prompt, robot.aliases)).toBe(true);
-    expect(isGuessCorrect("watering plant robot", robot.prompt, robot.aliases)).toBe(true);
-    expect(isGuessCorrect("robot gardener", robot.prompt, robot.aliases)).toBe(false);
-    expect(isGuessCorrect("gardening robot", robot.prompt, robot.aliases)).toBe(false);
-
-    const gardener = card("robot gardener");
-    expect(isGuessCorrect("gardening robot", gardener.prompt, gardener.aliases)).toBe(true);
-    expect(isGuessCorrect("robot watering a plant", gardener.prompt, gardener.aliases)).toBe(false);
-
-    const octopus = card("octopus playing drums");
-    expect(isGuessCorrect("an octopus playing the drums", octopus.prompt, octopus.aliases)).toBe(true);
-    expect(isGuessCorrect("drum-playing octopus", octopus.prompt, octopus.aliases)).toBe(true);
-  });
-
-  it("requires meaningful descriptors and actions unless a broad alias is intentional", () => {
-    const card = (prompt: string) => PROMPT_DECK.find((candidate) => candidate.prompt === prompt)!;
-
-    const requiredConcepts = [
-      ["sleepy volcano", "volcano"],
-      ["birthday meteor", "meteor"],
-      ["dancing teapot", "teapot"],
-      ["snowman vacation", "snowman"],
-      ["roller-skating octopus", "octopus"],
-      ["bicycle with square wheels", "bicycle"],
-    ] as const;
-    for (const [prompt, incompleteGuess] of requiredConcepts) {
-      const promptCard = card(prompt);
-      expect(isGuessCorrect(incompleteGuess, promptCard.prompt, promptCard.aliases)).toBe(false);
-    }
-
-    const intendedBroadAliases = [
-      ["tiny dragon", "dragon"],
-      ["beach castle", "sandcastle"],
-      ["cactus wearing a hat", "cowboy cactus"],
-    ] as const;
-    for (const [prompt, fairGuess] of intendedBroadAliases) {
-      const promptCard = card(prompt);
-      expect(isGuessCorrect(fairGuess, promptCard.prompt, promptCard.aliases)).toBe(true);
-    }
+    const turtle = card("sleepy turtle");
+    expect(isGuessCorrect("sleepy turtle", turtle.prompt, turtle.aliases)).toBe(true);
+    expect(isGuessCorrect("sleeping turtle", turtle.prompt, turtle.aliases)).toBe(true);
+    expect(isGuessCorrect("tired turtle", turtle.prompt, turtle.aliases)).toBe(true);
+    expect(isGuessCorrect("drowsy turtle", turtle.prompt, turtle.aliases)).toBe(true);
+    expect(isGuessCorrect("turtle", turtle.prompt, turtle.aliases)).toBe(false);
+    expect(isGuessCorrect("slow turtle", turtle.prompt, turtle.aliases)).toBe(false);
   });
 });
 

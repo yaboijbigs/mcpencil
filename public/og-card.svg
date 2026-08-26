@@ -1,7 +1,7 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
-  <title id="title">MCPencil — Bring your own agent to game night</title>
-  <desc id="desc">A playful paper game board with a pencil, human and agent player cards, and an abstract shared drawing</desc>
-  <rect width="1200" height="630" fill="#f1e7d3"/>
+  <title id="title">MCPencil — Draw, guess, and swap roles with your agent</title>
+  <desc id="desc">A tactile MCPencil game box showing Practice Pair, Team Arena, and Exhibition modes for humans and WebMCP agents.</desc>
+  <rect width="1200" height="630" fill="#f5f0e8"/>
   <path d="M0 64h1200M0 568h1200" stroke="#d8c8aa" stroke-width="2" stroke-dasharray="8 13"/>
   <circle cx="1080" cy="82" r="130" fill="#ef654f" opacity=".12"/>
   <circle cx="93" cy="552" r="165" fill="#3157d5" opacity=".11"/>
@@ -21,9 +21,9 @@
     </g>
 
     <text x="206" y="98" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="70" font-weight="800" letter-spacing="-3">MCPencil</text>
-    <rect x="781" y="48" width="219" height="54" rx="27" fill="#eaf0ff" stroke="#3157d5" stroke-width="3"/>
+    <rect x="781" y="48" width="219" height="54" rx="10" fill="#eaf0ff" stroke="#3157d5" stroke-width="3"/>
     <circle cx="817" cy="75" r="10" fill="#3c9a67"/>
-    <text x="840" y="84" fill="#2144b3" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700">WebMCP ready</text>
+    <text x="840" y="84" fill="#2144b3" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="800">WebMCP playable</text>
 
     <g transform="translate(57 139)">
       <rect width="700" height="310" rx="28" fill="#fffdf7" stroke="#17191d" stroke-width="4"/>
@@ -60,6 +60,24 @@
     </g>
   </g>
 
-  <rect x="126" y="562" width="948" height="53" rx="26" fill="#17191d"/>
-  <text x="600" y="598" text-anchor="middle" fill="#fffaf0" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="700" letter-spacing=".5">Bring your own agent to game night.  •  mcpencil.com</text>
+  <g transform="translate(74 542)">
+    <g>
+      <rect x="5" y="6" width="332" height="66" rx="11" fill="#17191d"/>
+      <rect width="332" height="66" rx="11" fill="#3157d5" stroke="#17191d" stroke-width="3"/>
+      <text x="17" y="24" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">BEST FIRST GAME · 1H + 1A</text>
+      <text x="17" y="51" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">PRACTICE PAIR</text>
+    </g>
+    <g transform="translate(360)">
+      <rect x="5" y="6" width="332" height="66" rx="11" fill="#17191d"/>
+      <rect width="332" height="66" rx="11" fill="#f2bd35" stroke="#17191d" stroke-width="3"/>
+      <text x="17" y="24" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">MIXED TEAMS · 4–8</text>
+      <text x="17" y="51" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">TEAM ARENA</text>
+    </g>
+    <g transform="translate(720)">
+      <rect x="5" y="6" width="332" height="66" rx="11" fill="#17191d"/>
+      <rect width="332" height="66" rx="11" fill="#ef654f" stroke="#17191d" stroke-width="3"/>
+      <text x="17" y="24" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">HUMAN ↔ AGENT · 4–8</text>
+      <text x="17" y="51" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">EXHIBITION</text>
+    </g>
+  </g>
 </svg>

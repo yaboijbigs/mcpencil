@@ -29,12 +29,27 @@ Record the release commit and result:
 
 | Field | Result |
 |---|---|
-| Commit SHA | `99adb2e9cab3aa1b7d438a756246a62cbd59ba8c` |
-| UTC timestamp | `2026-08-26T04:05:50Z` |
+| Commit SHA | `c1d511a64f0d752abfed60a93ad983c2bb1097f0` |
+| UTC timestamp | `2026-08-26T06:16:44Z` |
 | Node/npm | `v24.15.0` / `11.12.1` |
-| Tests | 48/48 passed across 4 Cloudflare Vitest files |
+| Tests | 71/71 passed |
 | Typecheck | Passed (`tsc -b`) |
 | Production build | Passed (`vite build`) |
+| Deployed Worker version | `fe498da0-2af8-492f-b408-37441bda170d` |
+
+That table is retained as the prior production diagnostic. The August 26 release candidate subsequently passed generated Cloudflare types, `tsc -b`, all **95/95 tests across 13 files**, `git diff --check`, and the Vite production build. On the process-heavy Windows development host, the identical Vitest suite was run with `--maxWorkers=1 --no-file-parallelism` after a parallel pool attempt exhausted worker-start capacity; no tests were skipped. The immutable Git SHA and Cloudflare Worker version belong in the public release/deployment record because a commit cannot contain its own final hash or the deployment identifier created from it.
+
+## Recorded production diagnostics
+
+The following observations were made against `https://mcpencil.com` on August 25–26, 2026. They are narrow implementation diagnostics, not a completed zero-context judge rehearsal:
+
+| Observation | Result | Scope |
+|---|---|---|
+| Page-lifetime WebMCP handle | Passed | The same registered tool handle remained usable across landing → lobby → active-agent-artist state. |
+| Inactive artist action gate | Passed | An attempted draw while inactive was rejected by the client action gate before a room mutation. |
+| Live stroke settlement | Passed | A production long-line stroke entered its reveal animation, then settled after about 900 ms with no reveal class/dash styling and with both exact canonical endpoints present. |
+
+These observations did **not** exercise a fresh zero-context invitation, a complete two-round Practice Pair, Claude, Gemini, both recommended ChatGPT models, or a repeated-run reliability target. Those items remain pending below and must not be described as passed in the README, video, or submission.
 
 ## 60-second judge-path rehearsal
 
@@ -51,14 +66,14 @@ Use a clean browser profile and the production domain.
 - [ ] Changing settings resets connected human ready states while agent seats remain auto-ready.
 - [ ] Round one assigns the companion agent as artist and the human as guesser.
 - [ ] The complete descriptor registry attaches once; the Lens lists only the agent-artist actions currently authorized, and the prompt event is masked.
-- [ ] Three or more `draw_stroke` calls each persist, broadcast, render, and acknowledge separately; no multi-stroke burst appears.
+- [ ] Three or more `draw_stroke` calls each persist and broadcast separately, return distinct accepted versions, and appear as discrete rendered strokes; no multi-stroke burst appears. The acknowledgement need not prove that a remote browser has already painted the version.
 - [ ] Human correct guess ends the round and reveals the answer once.
 - [ ] Round two assigns the human as artist and companion agent as guesser.
 - [ ] On role reversal, the Lens removes artist actions from its actionable set; `submit_guesses` becomes actionable only after the human prompt is hidden and the opening stroke lands.
 - [ ] Calling a stable descriptor outside its current actionable set fails before local work, and a direct stale mutation is independently rejected by the room authority.
 - [ ] Human prompt is private and is removed on round end.
-- [ ] Agent inspects the visible canvas and calls `submit_guesses`; every submitted candidate is visible live.
-- [ ] Round result and final replay contain the complete exact guess transcript with player, provenance, correctness, and timing.
+- [ ] The rendered canvas remains visible in the visiting agent's browser context; `get_match_state` exposes only bounded canonical geometry/recent guesses (no prompt metadata); the agent calls `submit_guesses`, and every submitted candidate is visible live. Record this transparently rather than claiming a pixel-only vision test.
+- [ ] Round result and final replay contain the complete exact guess transcript with player, declared origin, correctness, and timing.
 - [ ] Whole flow completes in 60–90 seconds without manual recovery.
 - [ ] A 6- or 8-round match completes without descriptor re-registration, a tool-configuration-limit warning, or loss of WebMCP access.
 
@@ -115,6 +130,19 @@ Also inspect the production JavaScript bundle: the production prompt deck should
 | High contrast/color vision | Team labels and patterns communicate what color alone would | [ ] |
 
 Test pen cancellation when the pointer leaves the canvas, browser zoom at 200%, IME input in the guess field, a long allowed display name, a long rejected guess, and switching browser tabs during a round.
+
+### Zero-context interoperability evidence
+
+No row below is complete yet. Record the exact app/browser build, model, invitation text, room, outcome, time to join, time to first action, tool errors, and whether any DOM/browser-automation fallback was attempted. A claimed supported client needs repeated fresh conversations, not a reused task with MCPencil context.
+
+| Client target | Required before claiming support | Recorded clean runs | Status |
+|---|---|---:|---|
+| ChatGPT desktop + GPT-5.6 Sol | Five fresh zero-context Practice invitations; final three consecutive runs clean | 0 | Pending |
+| ChatGPT desktop + GPT-5.6 Terra | Five fresh zero-context Practice invitations; final three consecutive runs clean | 0 | Pending |
+| Claude browser-agent surface | First confirm that the tested public client exposes page WebMCP; then run three fresh invitations | 0 | Capability and runs pending; not currently claimed as supported |
+| Gemini browser-agent surface | First confirm that the tested public client exposes page WebMCP; then run three fresh invitations | 0 | Capability and runs pending; not currently claimed as supported |
+
+For every run, opening the page is not success: the agent must call `play_mcpencil`, follow each callable `nextAction`, complete both directions, and reach `match-end` without substituting DOM clicks or generic browser automation for game actions.
 
 ## Golden visual evaluation
 
@@ -177,8 +205,9 @@ At feature freeze:
 
 1. Replace every `TODO_SUBMISSION` placeholder.
 2. Run `rg -n "TODO_SUBMISSION|<account-subdomain>" .` and resolve every intended public placeholder.
-3. Run the automated gate from a clean checkout.
-4. Tag the exact deployed commit and deploy that tag.
-5. Verify live URL, public repository, MIT license, and public YouTube link in a logged-out browser.
-6. Submit by 11:00 AM Pacific on September 3, leaving two hours before the 1:00 PM deadline.
-7. Freeze the tagged repository and deployment through winner announcement; urgent fixes require a new tag and full smoke test.
+3. Run `git status --short` and verify every required source file and asset is tracked while incidental local screenshots, generated scratch output, credentials, and caches are excluded.
+4. Run the automated gate from a clean checkout.
+5. Tag the exact public commit, deploy that tag, and record the commit, tag, UTC timestamp, and Worker version above.
+6. Verify the live URL, public repository, licenses/notices, and public YouTube link in a logged-out browser.
+7. Submit by 11:00 AM Pacific on September 3, leaving two hours before the 1:00 PM deadline.
+8. Freeze the tagged repository and deployment through winner announcement; urgent fixes require a new tag and full smoke test.

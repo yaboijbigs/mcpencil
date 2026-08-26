@@ -21,7 +21,12 @@ import {
   roomCodeFromUrl,
   type InviteAudience,
 } from "./invite";
+import { currentHumanPromptKey, humanPromptGate } from "./humanPromptGate";
+import { playAnotherMatch } from "./playAgain";
+import { getModeDefinition } from "./modes";
 import { CanvasBoard } from "./components/CanvasBoard";
+import { LandingExperience } from "./components/LandingExperience";
+import { LobbyExperience } from "./components/LobbyExperience";
 import {
   ArrowIcon,
   BotIcon,
@@ -44,10 +49,17 @@ export function App() {
   const sound = useGameSound();
   const [copiedInvite, setCopiedInvite] = useState<InviteAudience | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
-  const [hiddenPracticePrompt, setHiddenPracticePrompt] = useState<string | null>(null);
+  const [hiddenHumanPrompt, setHiddenHumanPrompt] = useState<string | null>(null);
+  const viewKey = session.snapshot
+    ? `${session.snapshot.roomCode}:${session.snapshot.phase}:${session.snapshot.roundIndex}`
+    : "landing";
   const primarySeat = session.snapshot?.seats.find(
     (seat) => seat.id === session.credentials?.seatId,
   );
+
+  useEffect(() => {
+    window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+  }, [viewKey]);
 
   const startPracticeForAgent = useCallback(
     async (name: string) => session.create({ name, mode: "practice", controller: "agent" }),
@@ -66,20 +78,21 @@ export function App() {
 
   const toolSeatId = session.companion?.seatId
     ?? (primarySeat?.controller === "agent" ? primarySeat.id : null);
-  const practicePromptKey = session.snapshot?.mode === "practice"
-    && (session.snapshot.phase === "round-prep" || session.snapshot.phase === "drawing")
-    && session.snapshot.artistSeatId === session.credentials?.seatId
-    && primarySeat?.controller === "human"
-    ? `${session.snapshot.roomCode}:${session.snapshot.roundIndex}`
-    : null;
-  const practicePromptGate = practicePromptKey === null
-    ? "none"
-    : hiddenPracticePrompt === practicePromptKey ? "hidden" : "required";
+  const activeHumanPromptKey = currentHumanPromptKey(
+    session.snapshot,
+    session.credentials?.seatId ?? null,
+    primarySeat?.controller ?? null,
+  );
+  const activeHumanPromptGate = humanPromptGate(activeHumanPromptKey, hiddenHumanPrompt);
+  const leaveToLanding = useCallback(
+    () => playAnotherMatch(session.leave, (url) => window.location.assign(url)),
+    [session.leave],
+  );
   const webmcp = useWebMcpTools({
     snapshot: session.snapshot,
     seatId: toolSeatId,
     enabled: session.credentials === null || session.snapshot !== null,
-    guessesEnabled: practicePromptGate !== "required",
+    guessesEnabled: activeHumanPromptGate !== "required",
     command: session.agentCommand,
     privatePrompt: session.agentPrivatePrompt,
     startPractice: startPracticeForAgent,
@@ -122,22 +135,22 @@ export function App() {
         soundEnabled={sound.enabled}
         onCopy={() => void copyInvite("person")}
         onToggleSound={sound.toggle}
-        onLeave={session.leave}
+        onLeave={leaveToLanding}
       />
 
       {!session.snapshot || !session.credentials ? (
-        <Landing
+        <LandingExperience
           busy={session.loading}
           onCreate={(input) => session.create(input)}
           onJoin={async (code, input) => { await session.join(code, input); }}
-          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} invocations={webmcp.invocations} activity={[]} />}
+          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={[]} />}
         />
       ) : session.snapshot.phase === "lobby" ? (
-        <Lobby
+        <LobbyExperience
           snapshot={session.snapshot}
           seatId={session.credentials.seatId}
           busy={actionBusy}
-          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
+          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
           onCommand={(command) => act(() => session.command(command))}
           copiedInvite={copiedInvite}
           onCopyInvite={(audience) => void copyInvite(audience)}
@@ -148,13 +161,14 @@ export function App() {
           seatId={session.credentials.seatId}
           companionSeatId={session.companion?.seatId ?? null}
           busy={actionBusy}
-          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
+          lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
           onCommand={(command) => act(() => session.command(command))}
           onPrompt={session.privatePrompt}
           onReplay={session.replay}
-          privatePromptGate={practicePromptGate}
+          onPlayAgain={leaveToLanding}
+          privatePromptGate={activeHumanPromptGate}
           onHidePrivatePrompt={() => {
-            if (practicePromptKey !== null) setHiddenPracticePrompt(practicePromptKey);
+            if (activeHumanPromptKey !== null) setHiddenHumanPrompt(activeHumanPromptKey);
           }}
           playSound={sound.play}
         />
@@ -188,26 +202,30 @@ function AppHeader({
   onToggleSound(): void;
   onLeave(): void;
 }) {
+  const mode = snapshot ? getModeDefinition(snapshot.mode) : null;
   return (
     <header className="topbar">
       <a className="brand" href="/" onClick={(event) => {
-        if (snapshot && !window.confirm("Leave this match?")) event.preventDefault();
+        if (!snapshot) return;
+        event.preventDefault();
+        if (window.confirm("Leave this match?")) onLeave();
       }}>
         <span className="brand-mark"><PencilIcon /></span>
         <span>MCP<span>encil</span></span>
-        <sup>BETA</sup>
+        <sup>WebMCP game</sup>
       </a>
       <div className="topbar-center">
         {snapshot ? <>
+          <span className={`mode-chip mode-${snapshot.mode}`}>{mode?.name}</span>
           <button className="room-chip" type="button" onClick={onCopy} title="Copy person invite link" aria-label={`Copy person invite link for room ${snapshot.roomCode}`}>
             <small>ROOM</small><strong>{snapshot.roomCode}</strong>{copied ? <CheckIcon /> : <CopyIcon />}
           </button>
           <span className={`connection-chip ${connected ? "online" : "reconnecting"}`}><span />{connected ? "Live" : "Reconnecting"}</span>
-        </> : <span className="topbar-tagline">Bring your own agent to game night.</span>}
+        </> : <span className="topbar-tagline">A drawing game where browser agents actually play.</span>}
       </div>
       <div className="topbar-actions">
         <button className={`icon-button quiet ${soundEnabled ? "" : "is-muted"}`} type="button" onClick={onToggleSound} aria-label={soundEnabled ? "Mute sounds" : "Enable sounds"}><SoundIcon /></button>
-        {snapshot ? <button className="text-button" type="button" onClick={onLeave}>Leave room</button> : <a className="text-link" href="#how-it-works">How it works</a>}
+        {snapshot ? <button className="text-button leave-button" type="button" onClick={onLeave}>Leave room</button> : <nav className="topbar-nav" aria-label="Landing page"><a className="text-link" href="#game-modes">Game modes</a><a className="text-link" href="#how-it-works">How it works</a></nav>}
       </div>
     </header>
   );
@@ -493,7 +511,7 @@ function SeatCard({ seat, isSelf }: { seat: RoomSnapshot["seats"][number]; isSel
   </div>;
 }
 
-function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, onPrompt, onReplay, privatePromptGate, onHidePrivatePrompt, playSound }: {
+function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, onPrompt, onReplay, onPlayAgain, privatePromptGate, onHidePrivatePrompt, playSound }: {
   snapshot: RoomSnapshot;
   seatId: string;
   companionSeatId: string | null;
@@ -502,6 +520,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
   onCommand(command: Parameters<ReturnType<typeof useRoomSession>["command"]>[0]): Promise<unknown>;
   onPrompt(signal?: AbortSignal): Promise<PrivatePrompt>;
   onReplay(signal?: AbortSignal): Promise<ReplayPayload>;
+  onPlayAgain(): void;
   privatePromptGate: "none" | "required" | "hidden";
   onHidePrivatePrompt(): void;
   playSound(cue: "tap" | "start" | "correct" | "finish"): void;
@@ -625,7 +644,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
         : "Get ready";
 
   if (snapshot.phase === "match-end") return (
-    <MatchEnd snapshot={snapshot} seatId={seatId} lens={lens} onReplay={onReplay} />
+    <MatchEnd snapshot={snapshot} seatId={seatId} lens={lens} onReplay={onReplay} onPlayAgain={onPlayAgain} />
   );
 
   if (privatePromptGate === "required") {
@@ -773,6 +792,7 @@ function LiveGuessBanner({ guesses, roundIndex }: { guesses: GuessEvent[]; round
 
 function RoundEnd({ snapshot, seatId, seconds, onNext, busy, lens }: { snapshot: RoomSnapshot; seatId: string; seconds: number; onNext(): Promise<unknown>; busy: boolean; lens: React.ReactNode }) {
   const result = snapshot.roundResult;
+  const modeName = getModeDefinition(snapshot.mode).name;
   const finalRound = snapshot.roundIndex + 1 >= snapshot.totalRounds;
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const liveSeats = snapshot.seats.filter((seat) => seat.isConnected);
@@ -783,14 +803,14 @@ function RoundEnd({ snapshot, seatId, seconds, onNext, busy, lens }: { snapshot:
     .sort((left, right) => left.createdAt - right.createdAt);
   const selfReady = self?.isReady ?? false;
 
-  return <div className="round-end-layout"><section className="round-result-card"><div className="confetti" aria-hidden="true">✦ · ✎ · ✦ ·</div><span className="eyebrow">Round {snapshot.roundIndex + 1} complete</span><h1>{result?.pointsAwarded ? "That was the idea!" : "Time’s up!"}</h1><p className="revealed-answer">{result?.prompt ?? "Prompt unavailable"}</p><div className="round-stat-row"><div><small>Points</small><strong>+{result?.pointsAwarded ?? 0}</strong></div><div><small>Guessed in</small><strong>{result?.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"}</strong></div><div><small>Strokes</small><strong>{result?.strokeCount ?? 0}</strong></div><div><small>Tool calls</small><strong>{result?.toolCallCount ?? 0}</strong></div></div>
+  return <div className="round-end-layout"><section className="round-result-card"><div className="confetti" aria-hidden="true">✦ · ✎ · ✦ ·</div><span className="eyebrow">{modeName} · Round {snapshot.roundIndex + 1} complete</span><h1>{result?.pointsAwarded ? "That was the idea!" : "Time’s up!"}</h1><p className="revealed-answer">{result?.prompt ?? "Prompt unavailable"}</p><div className="round-stat-row"><div><small>Points</small><strong>+{result?.pointsAwarded ?? 0}</strong></div><div><small>Guessed in</small><strong>{result?.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"}</strong></div><div><small>Vector marks</small><strong>{result?.strokeCount ?? 0}</strong></div><div><small>WebMCP calls</small><strong>{result?.toolCallCount ?? 0}</strong></div></div>
     <div className="result-transition" role="status" aria-live="polite"><span className="result-countdown">{seconds > 0 ? `0:${String(seconds).padStart(2, "0")}` : "Advancing…"}</span><div><strong>{finalRound ? "Match results unlock after the scoreboard." : "The next round opens after the scoreboard."}</strong><small>Results remain visible for at least 8 seconds · {readyCount}/{liveSeats.length} connected players ready</small></div></div>
     <section className="round-guess-history" aria-label={`Every guess from round ${snapshot.roundIndex + 1}`}><header><div><span className="eyebrow">Complete transcript</span><h2>Every guess this round</h2></div><span>{guesses.length}</span></header><div className="round-guess-list">{guesses.map((guess) => <GuessEntry guess={guess} key={guess.id} />)}{guesses.length === 0 ? <p className="no-round-guesses">No accepted guesses this round.</p> : null}</div></section>
     {self?.controller === "human" ? <button className="primary-button jumbo" type="button" onClick={() => void onNext()} disabled={busy || selfReady}>{selfReady ? <><CheckIcon /> Ready recorded</> : <>{finalRound ? "Ready for match results" : `Ready for round ${snapshot.roundIndex + 2}`}<ArrowIcon /></>}</button> : <div className={`agent-guess-note ${selfReady ? "is-ready" : ""}`}><BotIcon /><div><strong>{selfReady ? "Agent readiness recorded." : <>Your agent has <code>ready_next</code>.</>}</strong><span>{selfReady ? "The authoritative results countdown controls the transition." : "Ask it to continue through WebMCP; the results stay visible for at least 8 seconds."}</span></div></div>}
   </section><aside className="round-lens">{lens}</aside></div>;
 }
 
-function MatchEnd({ snapshot, seatId, lens, onReplay }: { snapshot: RoomSnapshot; seatId: string; lens: React.ReactNode; onReplay(signal?: AbortSignal): Promise<ReplayPayload> }) {
+function MatchEnd({ snapshot, seatId, lens, onReplay, onPlayAgain }: { snapshot: RoomSnapshot; seatId: string; lens: React.ReactNode; onReplay(signal?: AbortSignal): Promise<ReplayPayload>; onPlayAgain(): void }) {
   const [replay, setReplay] = useState<ReplayPayload | null>(null);
   const [replayLoading, setReplayLoading] = useState(true);
   const [replayError, setReplayError] = useState<string | null>(null);
@@ -812,9 +832,10 @@ function MatchEnd({ snapshot, seatId, lens, onReplay }: { snapshot: RoomSnapshot
   const winner: TeamId | "tie" = snapshot.scores.cobalt === snapshot.scores.coral ? "tie" : snapshot.scores.cobalt > snapshot.scores.coral ? "cobalt" : "coral";
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const practice = snapshot.mode === "practice";
+  const exhibition = snapshot.mode === "exhibition";
   const practiceTurnsEach = snapshot.totalRounds / 2;
   const practiceTurnLabel = practiceTurnsEach === 1 ? "drawing" : "drawings";
-  return <main className="match-end-page"><section className="winner-banner"><span className="eyebrow">{practice ? `${snapshot.totalRounds}-round practice complete` : "Final score"}</span><h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>{practice ? <div className="practice-complete"><PeopleIcon /><span>↔</span><BotIcon /></div> : <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>}<p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p></section><div className="end-content"><ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} /><aside>{lens}<button className="secondary-button full" type="button" onClick={() => window.location.assign("/")}>Play another match</button></aside></div></main>;
+  return <main className="match-end-page"><section className="winner-banner"><span className="eyebrow">{practice ? `${snapshot.totalRounds}-round Practice Pair complete` : exhibition ? "Exhibition final" : "Team Arena final"}</span><h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : exhibition ? `${winner === "cobalt" ? "Cobalt" : "Coral"} owns the exhibition.` : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>{practice ? <div className="practice-complete"><PeopleIcon /><span>↔</span><BotIcon /></div> : <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>}<p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : exhibition ? "Same canvas. Same rules. Human and agent provenance preserved." : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p></section><div className="end-content"><ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} /><aside>{lens}<button className="secondary-button full" type="button" onClick={onPlayAgain}>Play another match</button></aside></div></main>;
 }
 
 function LoadingScreen() {

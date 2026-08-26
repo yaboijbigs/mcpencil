@@ -16,7 +16,7 @@ This model covers the browser client, imperative WebMCP tools, Worker routes, a 
 | Canvas/replay event log | Integrity, bounded resource use, deterministic rendering |
 | Player names and guesses | Treated as untrusted data; safe rendering and tool output |
 | Room availability | Rate-bounded; isolated from unrelated rooms |
-| Lens/activity data | Honest provenance without prompt or reasoning leakage |
+| Lens/activity data | Accurate declared origin without prompt or reasoning leakage |
 
 ## Trust boundaries
 
@@ -44,7 +44,7 @@ Controls:
 - the private prompt path verifies the token hash, active seat, artist role, phase, and round;
 - raw prompts are never included in activity/Lens entries or application logs;
 - generic error codes do not interpolate answers;
-- Practice round two keeps `submit_guesses` non-actionable until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
+- every human-artist round keeps a same-page companion agent's `submit_guesses` non-actionable until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
 - tests recursively scan every pre-reveal shared payload for the answer and known aliases.
 
 ### Seat impersonation or token theft
@@ -56,12 +56,26 @@ Controls:
 - room codes identify routing, not authority;
 - seat tokens are generated with Web Crypto and contain at least 256 bits of entropy;
 - only cryptographic token hashes are persisted;
-- tokens are supplied outside URLs and never returned after initial seat creation/join;
+- ordinary HTTP API calls use bearer authorization and do not place tokens in URLs;
+- the browser WebSocket constructor cannot set a bearer header, so the current WSS handshake includes the seat token in its TLS-protected query; the Worker transfers it to an internal header, and the Durable Object persists only the token hash and attaches only the seat ID to the accepted socket;
 - responses disable cross-origin tool exposure and framing;
-- logs exclude authorization values;
+- application code does not log authorization values or handshake URLs;
 - comparison uses fixed-size digests.
 
-Residual risk: a malicious script or extension with access to the player's browser storage can act as that seat. Account-based recovery is deliberately outside the anonymous-game scope.
+Residual risks: intermediary access logging can capture a WebSocket request URL, and a malicious script or extension with access to browser storage can act as that seat. Before a higher-risk public deployment, replace the query credential with a short-lived, single-purpose socket ticket and verify edge-log redaction. Account-based recovery is deliberately outside the anonymous-game scope.
+
+### Practice invitation capture
+
+Threats include enumerating or forwarding a five-character room code and claiming the complementary Practice seat before the intended agent joins.
+
+Controls and limits:
+
+- the code locates an invite-only room but grants no authority over an existing seat;
+- Practice admits at most two seats and requires one declared human controller and one declared agent controller;
+- every joined seat receives a distinct high-entropy credential, and subsequent actions require that credential;
+- this release does not sign the invitation or authenticate which agent should claim the open seat.
+
+The remaining-seat race is accepted for short-lived challenge rooms, not described as strong admission security. Signed, one-use agent invitations plus join-rate monitoring are future hardening.
 
 ### Prompt injection through player content
 
@@ -135,16 +149,29 @@ Controls:
 
 - the complete semantic descriptor registry is attached once for the document lifetime, avoiding repeated configuration changes without presenting descriptors as permissions;
 - every role/phase update atomically recomputes the exact actionable set, and each handler rejects calls outside that set before work begins;
-- invocation execution signals protect pending network and acknowledgement waits;
+- invocation execution signals cancel pending client network and long-poll work;
 - server authorization is based on current persisted state, never on the descriptor registry or Lens set;
 - round and expected-version checks prevent cross-phase commits;
 - tests assert one stable registration pass, the exact actionable set for each role/phase, and rejection of stale direct invocations.
+
+### Provenance spoofing
+
+Threats include a modified client declaring an agent controller and submitting `origin: webmcp` without using a page-registered tool, or declaring a human controller while automating UI requests.
+
+Controls and limits:
+
+- the server binds a controller type to each seat and rejects command origins that do not match that declaration;
+- role, phase, token, time, rate, round, and version authorization never depends on the origin label;
+- the Lens and analytics report declared command origin without claiming model identity or cryptographic attestation;
+- no release mechanism proves that a particular model, browser feature, or unmodified tool handler produced the request.
+
+This is sufficient for transparent party-game analytics, not forensic provenance. Submission materials must call these labels declared origin, and any future competitive benchmark should add an attested channel before treating them as proof.
 
 ## Privacy and logging
 
 MCPencil requires no account, email, model credential, microphone, camera, upload, or geolocation. Persisted data is limited to room lifecycle, hashed seat credentials, display names, controller labels, vector operations, guesses, scores, and public round results.
 
-Structured operational logs may include route, status, room-code hash, phase, duration, safe error code, and canvas/revision numbers. They must exclude active prompts, raw seat tokens, full request bodies, WebSocket attachment credentials, and player-authored free text.
+Structured operational logs may include route, status, room code or a room-code hash, phase, duration, safe error code, and canvas/revision numbers. They must exclude active prompts, raw seat tokens, full request bodies, WebSocket handshake URLs, WebSocket attachment credentials, and player-authored free text. Raw room codes currently identify short-lived invite rooms; hashing them before the release freeze would further reduce avoidable correlation in retained logs.
 
 ## Security headers release check
 

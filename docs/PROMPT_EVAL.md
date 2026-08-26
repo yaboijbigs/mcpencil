@@ -4,7 +4,7 @@
 
 MCPencil prompts should reward composition, not text spelling or cultural trivia. Every card must be safe for a general audience, understandable without brand knowledge, drawable with the six allowed vector primitives, and visually judgeable on a `1000 × 700` canvas.
 
-The deck is original to this project. Common nouns are facts and not proprietary game content; the combinations, categories, aliases, and difficulty labels below were authored for MCPencil during the challenge period.
+The deck is original to this project. Common nouns are facts and not proprietary game content; the combinations, categories, accepted whole-answer aliases, and rejected near-misses were authored for MCPencil during the challenge period.
 
 Rules for production cards:
 
@@ -12,7 +12,8 @@ Rules for production cards:
 - no answer that is best communicated by writing letters or numbers;
 - no color-dependent answer;
 - one dominant subject for easy cards, one relation or action for medium cards, two interacting subjects for hard cards;
-- aliases represent ordinary wording differences, never clues unrelated to the visible concept;
+- aliases represent ordinary full-answer wording differences, never a shortcut that drops a required subject, action, or modifier;
+- every card records tempting rejected answers so incomplete guesses stay rejected in automated tests;
 - avoid near-duplicate answers within one match;
 - do not expose category or aliases to guessers before reveal;
 - manually draw each card once with the allowed primitives before admitting it to the deck.
@@ -24,34 +25,25 @@ This set is frozen for repeatable release evaluation. It should not be used as t
 | ID | Canonical answer | Category | Difficulty | Curated aliases | Visual anchors |
 |---|---|---|---|---|---|
 | G01 | lighthouse | places | easy | light house | tower, beam, water |
-| G02 | hot air balloon | travel | easy | balloon | large envelope, basket, sky |
+| G02 | hot air balloon | travel | easy | air balloon | large envelope, basket, sky |
 | G03 | robot watering a plant | actions | medium | robot watering plant | robot, watering can, sprout |
-| G04 | raccoon stealing a sandwich | animals | hard | raccoon with sandwich; raccoon taking a sandwich | mask face, striped tail, sandwich, reaching |
-| G05 | astronaut walking a dog | space | medium | astronaut with dog; astronaut dog walk | helmet, leash, dog, stars |
-| G06 | cactus wearing a cowboy hat | silly things | medium | cactus with cowboy hat; cowboy cactus | cactus arms, pot/desert, wide hat |
+| G04 | raccoon stealing a sandwich | animals | hard | raccoon with stolen sandwich; sandwich thief raccoon | mask face, striped tail, sandwich, reaching |
+| G05 | astronaut walking a dog | space | medium | astronaut dog walk; space dog walk | helmet, leash, dog, stars |
+| G06 | cactus wearing a hat | silly things | medium | cactus with cowboy hat; cowboy cactus | cactus arms, pot/desert, wide hat |
 | G07 | octopus playing drums | music | hard | drumming octopus; octopus drummer | eight arms, drum kit, sticks |
 | G08 | toaster at the beach | odd places | medium | beach toaster; toaster on a beach | toaster, toast slots, sun, waves/sand |
-| G09 | moon fishing for a star | space | hard | moon catching a star; moon fishing | crescent, rod, line, star |
+| G09 | moon fishing for a star | space | hard | moon catching a star; fishing moon with star | crescent, rod, line, star |
 | G10 | bicycle with square wheels | impossible machines | medium | bike with square wheels; square wheel bicycle | bicycle frame, two squares |
-| G11 | penguin delivering pizza | jobs | hard | pizza delivery penguin; penguin with pizza | penguin body, pizza box/slice, motion |
+| G11 | penguin delivering pizza | jobs | hard | pizza delivery penguin; penguin pizza courier | penguin body, pizza box/slice, motion |
 | G12 | cloud using an umbrella | weather | medium | cloud with umbrella; umbrella cloud | cloud, rain, umbrella beneath/held |
 
 The answer matcher additionally handles case, punctuation, repeated spacing, accents, and a one-character typo for sufficiently long normalized answers. The recorded test result must distinguish an accepted canonical/alias/typo from a semantic near-miss.
 
 ## Production deck balance
 
-Target at least 72 cards before public launch:
+The production deck contains at least 150 server-side cards. Practice Pair draws from at least 100 vetted easy/medium cards, preventing the tiny-pool repetition that made separate practice matches feel identical while keeping the judge path legible. Both modes deal without replacement inside a match.
 
-| Category | Count | Easy | Medium | Hard |
-|---|---:|---:|---:|---:|
-| Animals | 12 | 4 | 5 | 3 |
-| Actions | 12 | 3 | 6 | 3 |
-| Objects | 12 | 5 | 5 | 2 |
-| Places and travel | 12 | 4 | 5 | 3 |
-| Space and weather | 12 | 3 | 6 | 3 |
-| Silly combinations | 12 | 2 | 6 | 4 |
-
-Practice Pair should draw from a separate short list of visually reliable easy/medium cards so the judge path is fast, but it must still select server-side and keep prompts private.
+Every canonical answer and accepted alias is normalized-unique and tested as correct. Every card also carries one or more rejected near-misses that are tested as incorrect. For example, `sleepy turtle` accepts `sleeping turtle`, `tired turtle`, and `drowsy turtle`, while bare `turtle` does not count.
 
 ## Evaluation protocol
 

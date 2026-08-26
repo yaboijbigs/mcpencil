@@ -6,10 +6,13 @@ import {
   PRACTICE_ROUND_OPTIONS,
   PrimitiveSchema,
   ROUND_DURATION_OPTIONS_MS,
+  canGuess,
   isArtist,
+  type ActionOrigin,
   type CommandResult,
   type ControllerType,
   type JoinRoomResponse,
+  type MatchPhase,
   type PrivatePrompt,
   type RoomCommand,
   type RoomSnapshot,
@@ -32,6 +35,48 @@ export interface LensInvocation {
   startedAt: number;
   durationMs?: number;
   canvasVersion: number;
+  batchId?: string;
+  provenance: Extract<ActionOrigin, "webmcp">;
+  annotations?: WebMCP.ToolAnnotations;
+  result?: LensResultEvidence;
+}
+
+export interface LensResultEvidence {
+  accepted?: boolean;
+  revision?: number;
+  canvasVersion?: number;
+  batchId?: string;
+  correct?: boolean;
+  attemptCount?: number;
+  phase?: string;
+  role?: string;
+  promptMasked?: boolean;
+}
+
+export interface WebMcpToolDescriptorEvidence {
+  name: string;
+  title: string;
+  description: string;
+  annotations?: WebMCP.ToolAnnotations;
+}
+
+export interface WebMcpProofContext {
+  phase: MatchPhase | "landing";
+  role: "artist" | "guesser" | "spectator" | "visitor";
+  controller: ControllerType | null;
+  seatName: string | null;
+  roomCode: string | null;
+  round: number | null;
+  totalRounds: number | null;
+}
+
+export interface ToolAuthorizationEvent {
+  id: string;
+  tool: string;
+  change: "granted" | "revoked";
+  createdAt: number;
+  phase: WebMcpProofContext["phase"];
+  role: WebMcpProofContext["role"];
 }
 
 interface UseWebMcpToolsOptions {
@@ -51,31 +96,10 @@ interface UseWebMcpToolsOptions {
 }
 
 const EmptySchema = { type: "object", properties: {}, additionalProperties: false };
-const NumberInput = { type: "number" };
+const { $schema: _primitiveSchemaDialect, ...GeneratedPrimitiveInputSchema } = z.toJSONSchema(PrimitiveSchema);
 const PrimitiveInputSchema = {
-  type: "object",
-  description: "One shape. Geometry by type: line=x1,y1,x2,y2; polyline=points (2+); ellipse=cx,cy,rx,ry; rectangle=x,y,rectWidth,rectHeight,radius?; arc=cx,cy,radius,startAngle,endAngle; polygon=points (3+). points are {x,y}. Coordinates are 0-1000 (visible canvas height 700). fill is optional. Runtime validation is authoritative.",
-  properties: {
-    type: { type: "string", enum: ["line", "polyline", "ellipse", "rectangle", "arc", "polygon"] },
-    x1: NumberInput, y1: NumberInput, x2: NumberInput, y2: NumberInput,
-    points: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { x: NumberInput, y: NumberInput },
-        required: ["x", "y"],
-        additionalProperties: false,
-      },
-    },
-    cx: NumberInput, cy: NumberInput, rx: NumberInput, ry: NumberInput,
-    x: NumberInput, y: NumberInput, rectWidth: NumberInput, rectHeight: NumberInput,
-    radius: NumberInput, startAngle: NumberInput, endAngle: NumberInput,
-    color: { type: "string", enum: ["ink", "cobalt", "coral", "sun", "leaf", "paper"] },
-    width: { type: "number", enum: [3, 5, 7, 12, 20] },
-    fill: { type: "string", enum: ["ink", "cobalt", "coral", "sun", "leaf", "paper"] },
-  },
-  required: ["type", "color", "width"],
-  additionalProperties: false,
+  ...GeneratedPrimitiveInputSchema,
+  description: "Exactly one discriminated vector primitive. X coordinates must be 0-1000 and Y coordinates 0-700. The full ellipse, rectangle, or arc extent must remain inside the visible canvas. Lines and polylines need at least two distinct points; polygons need at least three distinct, non-collinear vertices with nonzero area; arcs cannot be zero- or full-turn circles.",
 };
 
 const DrawStrokeInput = z.object({
@@ -120,6 +144,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   const supported = Boolean(document.modelContext);
   const [invocations, setInvocations] = useState<LensInvocation[]>([]);
   const [registeredToolNames, setRegisteredToolNames] = useState<Set<string>>(() => new Set());
+  const [authorizationEvents, setAuthorizationEvents] = useState<ToolAuthorizationEvent[]>([]);
   const [consumedReadyNextKey, setConsumedReadyNextKey] = useState<string | null>(null);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -137,6 +162,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     versionRef.current = Math.max(versionRef.current, snapshot?.canvasVersion ?? 0);
   }
   const registrationsRef = useRef(new Map<string, ToolRegistration>());
+  const descriptorEvidenceRef = useRef(new Map<string, WebMcpToolDescriptorEvidence>());
+  const previousAuthorizedToolsRef = useRef<Set<string> | null>(null);
   const stateWaitersRef = useRef(new Set<StateWaiter>());
   const privatePromptCacheRef = useRef(new Map<string, Promise<PrivatePrompt>>());
   const drawStrokeChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -249,6 +276,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       inputSummary,
       startedAt,
       canvasVersion: versionRef.current,
+      provenance: "webmcp",
+      annotations: descriptorEvidenceRef.current.get(name)?.annotations,
     };
     setInvocations((items) => [pending, ...items].slice(0, 18));
     try {
@@ -258,12 +287,21 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       const outputVersion = canvasVersionFrom(output);
       if (outputVersion !== null) versionRef.current = Math.max(versionRef.current, outputVersion);
       const outputSummary = summarizeOutput(output);
+      const result = lensResultEvidence(output);
       setInvocations((items) => items.map((item) => item.id === id
-        ? { ...item, status: "ok", outputSummary, durationMs: Date.now() - startedAt, canvasVersion: versionRef.current }
+        ? {
+            ...item,
+            status: "ok",
+            outputSummary,
+            durationMs: Date.now() - startedAt,
+            canvasVersion: versionRef.current,
+            ...(result?.batchId ? { batchId: result.batchId } : {}),
+            ...(result ? { result } : {}),
+          }
         : item));
       return output;
     } catch (reason) {
-      const message = reason instanceof Error ? reason.message : "Tool call failed";
+      const message = safeErrorSummary(reason);
       setInvocations((items) => items.map((item) => item.id === id
         ? { ...item, status: "error", outputSummary: message, durationMs: Date.now() - startedAt }
         : item));
@@ -307,7 +345,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
             promptCategory: prompt.category,
             nextAction: {
               tool: "draw_stroke",
-              instruction: "Do not narrate, inspect the blank canvas, or plan the whole drawing. Send ONE high-information stroke now; after its acknowledgement, immediately send the next stroke.",
+              instruction: "Send ONE high-information stroke now: X 0-1000, Y 0-700, with every ellipse/rectangle/arc extent fully visible. Do not narrate or plan the whole drawing; after acknowledgement, immediately send the next stroke.",
             },
             urgency: "immediate",
             deadline: currentSnapshot.endsAt,
@@ -455,7 +493,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     definitions.push(
       tool({
         name: "draw_stroke", title: "Draw one stroke now",
-        description: "Draw exactly ONE primitive on the 1000x700 canvas. Do not narrate, inspect the blank canvas, prepare multiple commands, or plan the full picture. Immediately send one high-information silhouette stroke. When it is acknowledged, immediately call draw_stroke again with the next stroke and the returned canvasVersion. Each call becomes visible to every player before the next call.",
+        description: "Draw exactly ONE primitive on the 1000x700 canvas. X coordinates must be 0-1000 and Y coordinates 0-700; keep the full ellipse, rectangle, or arc extent inside the visible canvas. Do not narrate, inspect the blank canvas, prepare multiple commands, or plan the full picture. Immediately send one high-information silhouette stroke. When it is acknowledged as persisted and broadcast, immediately call draw_stroke again with the next stroke and the returned canvasVersion. Receiving clients render each broadcast asynchronously.",
         inputSchema: {
           type: "object",
           properties: {
@@ -482,10 +520,9 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
               mustContinue: true,
               nextAction: {
                 tool: "draw_stroke",
-                arguments: { expectedCanvasVersion: result.canvasVersion, primitive: "ONE_NEXT_PRIMITIVE" },
-                instruction: "Send the next high-information stroke immediately; do not narrate or pause to plan.",
+                instruction: `Construct and send exactly one next primitive immediately with expectedCanvasVersion ${result.canvasVersion}; use X 0-1000 and Y 0-700 and keep shape extents visible. Do not narrate or pause to plan.`,
               },
-              guidance: `Stroke visible. Immediately call draw_stroke again with ONE next stroke and expectedCanvasVersion ${result.canvasVersion}; do not narrate or pause to plan.`,
+              guidance: `Stroke accepted and broadcast. Immediately call draw_stroke again with ONE next stroke and expectedCanvasVersion ${result.canvasVersion}; do not narrate or pause to plan.`,
             };
           };
           const queued = drawStrokeChainRef.current.then(draw, draw);
@@ -508,8 +545,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
             mustContinue: true,
             nextAction: {
               tool: "draw_stroke",
-              arguments: { expectedCanvasVersion: result.canvasVersion, primitive: "ONE_REPLACEMENT_PRIMITIVE" },
-              instruction: "Resume drawing now with one replacement stroke.",
+              instruction: `Construct and send exactly one replacement primitive now with expectedCanvasVersion ${result.canvasVersion}; use X 0-1000 and Y 0-700 and keep shape extents visible.`,
             },
           };
         }, compactCommand),
@@ -519,7 +555,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 
   definitions.push(tool({
     name: "submit_guesses", title: "Submit up to three visible guesses",
-    description: "Visually inspect the rendered canvas, then immediately submit 1-3 concise, ordered, distinct candidates. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer. After an incorrect result, reconsider the whole drawing when canvasVersion changes instead of fixating on the first idea.",
+    description: "Inspect the rendered canvas and the disclosed bounded canonical canvasGeometry, then immediately submit 1-3 concise, ordered, distinct candidates. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer. After an incorrect result, reconsider the whole drawing when canvasVersion changes instead of fixating on the first idea.",
     inputSchema: {
       type: "object",
       properties: {
@@ -627,6 +663,52 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     }, compactCommand),
   }));
 
+  const descriptorEvidence = definitions.map(toolDescriptorEvidence);
+  descriptorEvidenceRef.current = new Map(
+    descriptorEvidence.map((descriptor) => [descriptor.name, descriptor]),
+  );
+  const registeredTools = descriptorEvidence.filter((descriptor) => registeredToolNames.has(descriptor.name));
+  const actionableTools = toolNames.filter((name) => registeredToolNames.has(name));
+  const proofContext = webMcpProofContext(snapshot, seatId);
+  const authorizedToolFingerprint = toolNames.join("\u0000");
+
+  useEffect(() => {
+    const next = new Set(toolNames);
+    const previous = previousAuthorizedToolsRef.current;
+    previousAuthorizedToolsRef.current = next;
+    if (previous === null) return;
+
+    const createdAt = Date.now();
+    const changes: ToolAuthorizationEvent[] = [];
+    for (const name of next) {
+      if (!previous.has(name)) {
+        changes.push({
+          id: crypto.randomUUID(),
+          tool: name,
+          change: "granted",
+          createdAt,
+          phase: proofContext.phase,
+          role: proofContext.role,
+        });
+      }
+    }
+    for (const name of previous) {
+      if (!next.has(name)) {
+        changes.push({
+          id: crypto.randomUUID(),
+          tool: name,
+          change: "revoked",
+          createdAt,
+          phase: proofContext.phase,
+          role: proofContext.role,
+        });
+      }
+    }
+    if (changes.length > 0) {
+      setAuthorizationEvents((events) => [...changes.reverse(), ...events].slice(0, 18));
+    }
+  }, [authorizedToolFingerprint, proofContext.phase, proofContext.role]);
+
   useEffect(() => {
     const context = document.modelContext;
     if (!context) return;
@@ -680,7 +762,12 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 
   return {
     supported,
-    toolNames: toolNames.filter((name) => registeredToolNames.has(name)),
+    // `toolNames` remains as a compatibility alias for existing App consumers.
+    toolNames: actionableTools,
+    actionableTools,
+    registeredTools,
+    proofContext,
+    authorizationEvents,
     invocations,
   };
 }
@@ -688,6 +775,57 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 function isActiveAgentArtist(snapshot: RoomSnapshot | null, seatId: string | null): snapshot is RoomSnapshot {
   if (!snapshot || !isArtist(snapshot, seatId)) return false;
   return snapshot.seats.find((seat) => seat.id === seatId)?.controller === "agent";
+}
+
+function toolDescriptorEvidence(definition: WebMCP.ModelContextTool): WebMcpToolDescriptorEvidence {
+  return {
+    name: definition.name,
+    title: definition.title ?? definition.name,
+    description: definition.description,
+    ...(definition.annotations ? { annotations: { ...definition.annotations } } : {}),
+  };
+}
+
+function webMcpProofContext(snapshot: RoomSnapshot | null, seatId: string | null): WebMcpProofContext {
+  const seat = snapshot?.seats.find((candidate) => candidate.id === seatId) ?? null;
+  const role: WebMcpProofContext["role"] = seat === null
+    ? "visitor"
+    : snapshot !== null && isArtist(snapshot, seatId)
+      ? "artist"
+      : snapshot !== null && canGuess(snapshot, seatId) ? "guesser" : "spectator";
+  return {
+    phase: snapshot?.phase ?? "landing",
+    role,
+    controller: seat?.controller ?? null,
+    seatName: seat?.name ?? null,
+    roomCode: snapshot?.roomCode ?? null,
+    round: snapshot === null || snapshot.phase === "lobby" ? null : snapshot.roundIndex + 1,
+    totalRounds: snapshot?.totalRounds ?? null,
+  };
+}
+
+function lensResultEvidence(output: unknown): LensResultEvidence | undefined {
+  if (typeof output !== "object" || output === null) return undefined;
+  const record = output as Record<string, unknown>;
+  const result: LensResultEvidence = {};
+  if (typeof record.accepted === "boolean") result.accepted = record.accepted;
+  if (typeof record.revision === "number" && Number.isInteger(record.revision)) result.revision = record.revision;
+  if (typeof record.canvasVersion === "number" && Number.isInteger(record.canvasVersion)) {
+    result.canvasVersion = record.canvasVersion;
+  }
+  if (typeof record.batchId === "string" && record.batchId.length > 0) result.batchId = record.batchId;
+  if (typeof record.correct === "boolean") result.correct = record.correct;
+  if (Array.isArray(record.attempts)) result.attemptCount = record.attempts.length;
+  if (typeof record.phase === "string") result.phase = record.phase;
+  if (typeof record.yourRole === "string") result.role = record.yourRole;
+  if (Object.hasOwn(record, "privatePrompt")) result.promptMasked = true;
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
+function safeErrorSummary(reason: unknown) {
+  const message = reason instanceof Error ? reason.message : "Tool call failed";
+  if (/\bprompt\b/i.test(message)) return "Tool call failed while handling a private prompt · content masked";
+  return message.slice(0, 180);
 }
 
 function compactCommand(result: CommandResult) {
@@ -730,12 +868,34 @@ function summarizeInput(name: string, input: Record<string, unknown>) {
     const primitive = typeof input.primitive === "object" && input.primitive !== null
       ? input.primitive as Record<string, unknown>
       : null;
-    return `1 ${String(primitive?.type ?? "stroke")} · unique key generated`;
+    const expectedVersion = typeof input.expectedCanvasVersion === "number"
+      ? ` · expected canvas v${input.expectedCanvasVersion}`
+      : "";
+    return `One ${String(primitive?.type ?? "stroke")} primitive${expectedVersion}`;
   }
   if (name === "submit_guesses") {
     const guesses = Array.isArray(input.guesses) ? input.guesses : [];
-    return guesses.map((guess) => `“${String(guess).slice(0, 24)}”`).join(" → ");
+    return `${guesses.length} visible guess candidate${guesses.length === 1 ? "" : "s"} submitted`;
   }
+  if (name === "get_match_state") {
+    const afterRevision = typeof input.afterRevision === "number" ? `after revision ${input.afterRevision}` : "current revision";
+    const wait = typeof input.waitMs === "number" ? ` · wait up to ${input.waitMs}ms` : "";
+    return `${afterRevision}${wait}`;
+  }
+  if (name === "configure_match") {
+    return `${String(input.totalRounds)} rounds · ${String(input.roundDurationMs)}ms drawing time`;
+  }
+  if (name === "play_mcpencil") {
+    const fields = [
+      typeof input.roomCode === "string" ? "room code supplied" : null,
+      typeof input.name === "string" ? "display name supplied" : null,
+      typeof input.team === "string" ? `team ${input.team}` : null,
+    ].filter((value): value is string => value !== null);
+    return fields.length > 0 ? fields.join(" · ") : "Use the room identified by this page";
+  }
+  if (name === "start_practice") return "Display name supplied";
   const keys = Object.keys(input);
-  return keys.length ? keys.map((key) => `${key}: ${String(input[key]).slice(0, 24)}`).join(" · ") : "No input";
+  return keys.length
+    ? keys.map((key) => /prompt|token|secret|password/i.test(key) ? `${key}: masked` : key).join(" · ")
+    : "No input";
 }

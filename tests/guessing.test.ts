@@ -13,6 +13,13 @@ describe("guess normalization", () => {
     expect(isGuessCorrect("spyglass", "telescope", ["spyglass"])).toBe(true);
   });
 
+  it("ignores ordinary articles without dropping concept words", () => {
+    expect(isGuessCorrect("a sleepy turtle", "sleepy turtle", ["tired turtle"])).toBe(true);
+    expect(isGuessCorrect("an octopus playing drums", "octopus playing drums")).toBe(true);
+    expect(isGuessCorrect("the bear reading a book", "bear reading a book")).toBe(true);
+    expect(isGuessCorrect("toaster on a beach", "toaster at the beach", ["toaster on beach"])).toBe(true);
+  });
+
   it("accepts one substitution, insertion, deletion, or transposition for long answers", () => {
     expect(oneEditApart("camera", "camara")).toBe(true);
     expect(oneEditApart("camera", "cameras")).toBe(true);
@@ -28,6 +35,14 @@ describe("guess normalization", () => {
     expect(oneEditApart("same", "same")).toBe(false);
   });
 
+  it("does not typo-match semantic changes to required words", () => {
+    expect(isGuessCorrect("cat on a cardboard box", "cat in a cardboard box")).toBe(false);
+    expect(isGuessCorrect("bat in a cardboard box", "cat in a cardboard box")).toBe(false);
+    expect(isGuessCorrect("pear reading a book", "bear reading a book")).toBe(false);
+    expect(isGuessCorrect("fox hiding a scooter", "fox riding a scooter")).toBe(false);
+    expect(isGuessCorrect("frog in a lily pad", "frog on a lily pad")).toBe(false);
+  });
+
   it("does not accept semantic near-misses without a curated alias", () => {
     expect(isGuessCorrect("helicopter", "hot air balloon", ["balloon"])).toBe(false);
     expect(isGuessCorrect("tower", "lighthouse", ["light house"])).toBe(false);
@@ -37,7 +52,8 @@ describe("guess normalization", () => {
   it("recognizes conservative close guesses after normalization", () => {
     const aliases = ["cowboy cactus", "cactus wearing a cowboy hat"];
     expect(isGuessClose(" CÁCTUS!!! ", "cactus wearing a hat", aliases)).toBe(true);
-    expect(isGuessClose("cactus wearing hat", "cactus wearing a hat", aliases)).toBe(true);
+    expect(isGuessCorrect("cactus wearing hat", "cactus wearing a hat", aliases)).toBe(true);
+    expect(isGuessClose("cactus wearing", "cactus wearing a hat", aliases)).toBe(true);
     expect(isGuessClose("tree", "treehouse", ["tree house"])).toBe(true);
   });
 
