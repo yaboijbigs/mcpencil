@@ -15,6 +15,7 @@ import {
   type RoomSnapshot,
   type TeamId,
 } from "../../shared/game";
+import { roomCodeFromUrl } from "../invite";
 import { compactWebMcpRoundResult, compactWebMcpState, webMcpToolNames } from "../webMcpAvailability";
 
 export interface LensInvocation {
@@ -142,7 +143,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   const stateWaitersRef = useRef(new Set<StateWaiter>());
   const privatePromptCacheRef = useRef(new Map<string, Promise<PrivatePrompt>>());
   const drawStrokeChainRef = useRef<Promise<void>>(Promise.resolve());
-  const roomInviteCode = roomCodeFromUrl();
+  const roomInviteCode = roomCodeFromUrl(new URL(window.location.href));
 
   const settleStateWaiter = (waiter: StateWaiter, value: RoomSnapshot | null, reason?: unknown) => {
     if (!stateWaitersRef.current.delete(waiter)) return;
@@ -367,7 +368,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     tool({
       name: "get_match_state",
       title: "Inspect MCPencil match",
-      description: "Canonical continuation tool. Before joining, it directs an invited agent to play_mcpencil; opening the page alone is not success. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between actions, pass afterRevision and waitMs 25000 so the next WebSocket update wakes this call. Guessers also receive compact canvasGeometry and recentGuesses.",
+      description: "Canonical page-exposed WebMCP continuation state. Before joining, it identifies play_mcpencil as the entry action. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between turns, pass afterRevision and waitMs 25000. Guessers also receive compact canvasGeometry and recentGuesses.",
       inputSchema: {
         type: "object",
         properties: {
@@ -436,8 +437,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     definitions.push(
       tool({
         name: "play_mcpencil",
-        title: "Join and play MCPencil now",
-        description: "Use this immediately when the user says 'play me', 'join me', asks you to play MCPencil, or sends or opens an MCPencil room URL. Opening the page alone is NOT success. Call with no arguments to join the room in the current URL as an AI player and ready automatically, then follow every exact nextAction until phase is match-end.",
+        title: "Join this room and play via WebMCP",
+        description: "The complete page-exposed WebMCP entry point when a user asks you to play or opens an MCPencil room URL. Call with {} immediately after the page loads. It joins the current room as an AI player, readies the seat, and returns nextAction. Continue through MCPencil's page WebMCP tools until phase is match-end.",
         inputSchema: {
           type: "object",
           properties: {
@@ -457,8 +458,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
           const currentLobbyCode = snapshotRef.current?.phase === "lobby"
             ? snapshotRef.current.roomCode
             : null;
-          const roomCode = parsed.roomCode ?? currentLobbyCode ?? roomCodeFromUrl();
-          if (!roomCode) throw new Error("roomCode is required when the page URL has no valid ?room= code.");
+          const roomCode = parsed.roomCode ?? currentLobbyCode ?? roomCodeFromUrl(new URL(window.location.href));
+          if (!roomCode) throw new Error("roomCode is required when the page URL does not identify a valid room.");
           const name = parsed.name ?? defaultAgentName();
           const controller = "agent";
           const response = await actionsRef.current.joinMatch({ ...parsed, roomCode, name, controller });
@@ -813,11 +814,6 @@ function canvasVersionFrom(output: unknown): number | null {
 
 function remainingMs(snapshot: RoomSnapshot | null): number | null {
   return snapshot?.endsAt ? Math.max(0, snapshot.endsAt - Date.now()) : null;
-}
-
-function roomCodeFromUrl(): string | null {
-  const value = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "";
-  return /^[A-Z2-9]{5}$/.test(value) ? value : null;
 }
 
 function defaultAgentName() {

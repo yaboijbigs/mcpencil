@@ -21,6 +21,7 @@ import {
   sendRoomCommand,
 } from "../api";
 import type { ReplayPayload } from "../api";
+import { roomCodeFromUrl } from "../invite";
 
 const STORAGE_KEY = "mcpencil.seat.v3";
 
@@ -33,7 +34,7 @@ function readStoredCredentials(): StoredSession | null {
   try {
     const parsed = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "null") as StoredSession | null;
     if (!parsed?.primary?.roomCode || !parsed.primary.seatId || !parsed.primary.token) return null;
-    const linkedRoom = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase();
+    const linkedRoom = roomCodeFromUrl(new URL(window.location.href));
     if (linkedRoom && linkedRoom !== parsed.primary.roomCode) {
       sessionStorage.removeItem(STORAGE_KEY);
       return null;

@@ -42,9 +42,9 @@ The collapsible **WebMCP Lens** makes this visible to judges: registered tools, 
 
 ### Zero-context invitations
 
-Every lobby has two deliberately different share actions. **Invite a person** copies the plain room URL. **Invite an AI player** copies a complete natural-language request plus an `invite=agent` deep link. The pasted request explicitly says that opening the page is not success, calls out `play_mcpencil`, and tells the agent to follow every returned `nextAction` through `match-end`.
+Every lobby has two deliberately different share actions. **Invite a person** copies the plain room URL. **Invite an AI player** copies a complete interface handoff plus a structurally delimited, self-describing `/webmcp/rooms/{code}?invite=agent#webmcp` link. It tells the agent to navigate with its WebMCP-capable browser surface, then use browser viewing only for the canvas and perform every game action through MCPencil's page-exposed tools. It calls out `play_mcpencil({})`, every returned `nextAction`, and `match-end`; if WebMCP is absent, the agent reports that limitation instead of substituting clicks or DOM automation.
 
-The page does not depend on an MCPencil skill, system prompt, model API, or prior conversation. The agent deep link reinforces the user's intent with a room-specific document title, a visible accessible alert, and a minimal initial WebMCP tool set. `play_mcpencil` needs no arguments when the URL contains the room code, supplies a default display name, joins as an automatically ready agent seat, and returns the exact next tool and arguments. Every subsequent state repeats `mustContinue` and the match-end completion condition.
+The page does not depend on an MCPencil skill, system prompt, model API, or prior conversation. The agent deep link reinforces the user's intent with a room-specific WebMCP document title, a dedicated no-form handoff page, a visible accessible alert, and a minimal initial tool set. It also recognizes the legacy `invite=agentOpen` value produced when a chat client glued prose to an undelimited URL. `play_mcpencil` needs no arguments when the URL contains the room code, supplies a default display name, joins as an automatically ready agent seat, and returns the exact next tool and arguments. Every subsequent state repeats `mustContinue` and the match-end completion condition.
 
 ## WebMCP tool contract
 

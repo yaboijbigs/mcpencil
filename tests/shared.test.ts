@@ -257,10 +257,11 @@ describe("dynamic WebMCP availability", () => {
       mustContinue: true,
       completionCondition: expect.stringContaining("match-end"),
       availableActions: ["play_mcpencil"],
+      interactionProtocol: expect.stringContaining("page-exposed WebMCP tools"),
       nextAction: {
         tool: "play_mcpencil",
         arguments: {},
-        instruction: expect.stringContaining("Opening this page alone is not success"),
+        instruction: expect.stringContaining("play_mcpencil WebMCP tool now with {}"),
       },
       urgency: "immediate",
     });
@@ -346,7 +347,7 @@ describe("dynamic WebMCP availability", () => {
       nextAction: {
         tool: "play_mcpencil",
         arguments: {},
-        instruction: expect.stringContaining("not success"),
+        instruction: expect.stringContaining("play_mcpencil WebMCP tool now with {}"),
       },
       urgency: "immediate",
     });

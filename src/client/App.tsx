@@ -15,6 +15,12 @@ import {
 } from "../shared/game";
 import { remainingSeconds } from "../shared/format";
 import type { ReplayPayload } from "./api";
+import {
+  buildRoomInvites,
+  isAgentInviteUrl,
+  roomCodeFromUrl,
+  type InviteAudience,
+} from "./invite";
 import { CanvasBoard } from "./components/CanvasBoard";
 import {
   ArrowIcon,
@@ -32,8 +38,6 @@ import { WebMcpLens } from "./components/WebMcpLens";
 import { useGameSound } from "./hooks/useGameSound";
 import { useRoomSession } from "./hooks/useRoomSession";
 import { useWebMcpTools } from "./hooks/useWebMcpTools";
-
-type InviteAudience = "person" | "agent";
 
 export function App() {
   const session = useRoomSession();
@@ -85,19 +89,12 @@ export function App() {
   const copyInvite = useCallback(async (audience: InviteAudience) => {
     const code = session.snapshot?.roomCode;
     if (!code) return;
-    const url = new URL(window.location.pathname, window.location.origin);
-    url.searchParams.set("room", code);
-
-    let clipboardText = url.toString();
-    if (audience === "agent") {
-      url.searchParams.set("invite", "agent");
-      clipboardText = [
-        `Play MCPencil with me: ${url.toString()}`,
-        "Open the link and immediately call the page's play_mcpencil WebMCP tool. Opening the page alone does not join the game. Keep following each returned nextAction until the match ends.",
-      ].join("\n\n");
-    }
-
-    await navigator.clipboard.writeText(clipboardText);
+    const invitations = buildRoomInvites(
+      code,
+      window.location.origin,
+      window.location.pathname,
+    );
+    await navigator.clipboard.writeText(invitations[audience].text);
     setCopiedInvite(audience);
     window.setTimeout(() => {
       setCopiedInvite((current) => current === audience ? null : current);
@@ -227,10 +224,11 @@ function Landing({
   onJoin(code: string, input: { name: string; team?: TeamId; controller: ControllerType }): Promise<void>;
   lens: React.ReactNode;
 }) {
-  const roomFromUrl = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
+  const currentUrl = new URL(window.location.href);
+  const roomFromUrl = roomCodeFromUrl(currentUrl) ?? "";
   const hasValidRoomInvite = /^[A-Z2-9]{5}$/.test(roomFromUrl);
   const isAgentInvite = hasValidRoomInvite
-    && new URLSearchParams(window.location.search).get("invite") === "agent";
+    && isAgentInviteUrl(currentUrl);
   const [tab, setTab] = useState<"practice" | "arena" | "join">(roomFromUrl ? "join" : "practice");
   const [name, setName] = useState("");
   const [roomCode, setRoomCode] = useState(roomFromUrl);
@@ -242,18 +240,44 @@ function Landing({
     else await onCreate({ name, mode: tab === "practice" ? "practice" : "arena", controller: tab === "practice" ? "human" : controller });
   };
 
-  return (
-    <main className="landing-page">
-      {isAgentInvite ? (
+  if (isAgentInvite) {
+    const personUrl = buildRoomInvites(
+      roomFromUrl,
+      window.location.origin,
+      window.location.pathname,
+    ).person.url;
+    return (
+      <main className="landing-page agent-handoff-page">
         <section className="agent-invite-alert" role="alert" aria-labelledby="agent-invite-title">
           <span className="agent-invite-icon" aria-hidden="true"><BotIcon /></span>
           <div>
             <span className="eyebrow">AI player invitation · Room {roomFromUrl}</span>
-            <h2 id="agent-invite-title">Opening this page does not join the match.</h2>
-            <p>Use WebMCP now: call <code>play_mcpencil</code>, then follow every returned <code>nextAction</code> until the match ends.</p>
+            <h2 id="agent-invite-title">Navigation complete. Switch to this page’s WebMCP tools.</h2>
+            <p>Browser navigation brought you here; joining and gameplay happen through MCPencil’s page-exposed tools.</p>
           </div>
         </section>
-      ) : null}
+        <section className="agent-handoff-grid">
+          <article className="agent-handoff-card" aria-labelledby="agent-handoff-heading">
+            <span className="agent-handoff-glyph" aria-hidden="true"><BotIcon /></span>
+            <span className="eyebrow">Required first game action</span>
+            <h1 id="agent-handoff-heading">Call the page tool now.</h1>
+            <code className="agent-handoff-command">play_mcpencil({"{}"})</code>
+            <ol>
+              <li>Use the page-exposed <code>play_mcpencil</code> WebMCP tool to join and ready the AI seat.</li>
+              <li>Perform drawing, guessing, readiness, and continuation through MCPencil WebMCP tools—not page clicks or DOM automation.</li>
+              <li>Follow every returned <code>nextAction</code> until the state says <code>phase: match-end</code>.</li>
+            </ol>
+            <p className="agent-handoff-fallback">If <code>play_mcpencil</code> is not available, this browser surface does not expose WebMCP. Report that limitation instead of substituting UI automation.</p>
+            <a className="text-link" href={personUrl}>I’m a person — open the human join page</a>
+          </article>
+          <aside className="agent-handoff-lens">{lens}</aside>
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="landing-page">
       <section className="hero-grid">
         <div className="hero-copy">
           <div className="hero-kicker"><SparkIcon /> A party game built for people + agents</div>

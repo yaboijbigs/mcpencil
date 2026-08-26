@@ -36,7 +36,7 @@ export function webMcpToolNames(
 }
 
 const PLAY_INTENT = "play_mcpencil_with_user";
-const COMPLETION_CONDITION = "Continue until phase is match-end. Opening the page, joining the room, or waiting in the lobby is not completion.";
+const COMPLETION_CONDITION = "Use MCPencil's page-exposed WebMCP tools for every game action and continue until phase is match-end. Loading the page, joining, or waiting is not completion.";
 
 export function compactWebMcpState(
   snapshot: RoomSnapshot | null,
@@ -52,12 +52,13 @@ export function compactWebMcpState(
       mustContinue: true,
       completionCondition: COMPLETION_CONDITION,
       availableActions: hasInvite ? ["play_mcpencil"] : ["start_practice", "play_mcpencil"],
+      interactionProtocol: "page-exposed WebMCP tools; browser navigation and visual viewing are not game actions",
       nextAction: {
         tool: "play_mcpencil",
         ...(hasInvite ? { arguments: {} } : {}),
         instruction: hasInvite
-          ? "Call now with no arguments to join and ready as the user's AI player. Opening this page alone is not success."
-          : "Open an MCPencil room invite or provide its five-character roomCode, then join and play.",
+          ? "Call the page-exposed play_mcpencil WebMCP tool now with {} to join and ready as the user's AI player."
+          : "Open an MCPencil room in a WebMCP-capable agent browser, then use play_mcpencil to join and play.",
       },
       urgency: "immediate",
       deadline: null,
@@ -162,7 +163,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
       nextAction: {
         tool: "play_mcpencil",
         arguments: {},
-        instruction: "Join and ready as the user's AI player now. Opening or observing the lobby is not success.",
+        instruction: "Call the page-exposed play_mcpencil WebMCP tool now with {} to join and ready as the user's AI player.",
       },
       urgency: "immediate",
     };

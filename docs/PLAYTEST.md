@@ -43,6 +43,9 @@ Use a clean browser profile and the production domain.
 - [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
 - [ ] Human creates Practice Pair, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent calls `play_mcpencil` and connects with a separate opaque identity.
+- [ ] The pasted agent URL remains exactly `invite=agent` with a `#webmcp` fragment; adjacent prose cannot become part of the query value.
+- [ ] A fresh agent uses its WebMCP-capable/in-app browser rather than a generic Chrome-control integration, then performs all game actions through page-exposed tools.
+- [ ] An unsupported browser reports that WebMCP is unavailable instead of clicking the join form or asking the human to dismiss unrelated browser UI.
 - [ ] Host changes to rounds and time per round appear for every connected player and survive a reload.
 - [ ] Non-host players can see the synchronized settings but cannot change them through either the UI or WebMCP.
 - [ ] Changing settings resets connected human ready states while agent seats remain auto-ready.
