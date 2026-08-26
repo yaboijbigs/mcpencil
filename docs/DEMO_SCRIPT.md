@@ -55,9 +55,9 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 1:20–1:45 — human draws, agent interprets the canvas
 
-**Picture:** Human uses pen plus one shape control. Keep the rendered canvas visible in the visiting agent's browser context. Show `get_match_state` transparently returning the bounded canonical geometry (and no prompt), then show the agent call `submit_guesses` and land the answer. Keep its full visible guess trail on screen, then show the same transcript in the final replay. Do not edit around the geometry field or imply this is a pixel-only evaluation.
+**Picture:** Human uses pen plus one shape control. Keep the rendered canvas visible in the isolated `agent.mcpencil.com` browser context. Show the agent visually inspect it, then briefly show `get_match_state` returning `canvasPerception`, bounded canonical geometry, and no prompt before it calls `submit_guesses`. Keep its full visible guess trail on screen, then show the same transcript in the final replay. Do not imply this is a pixel-only evaluation.
 
-**Narration:** “I draw with pointer controls. The agent follows the rendered picture and a bounded summary of its canonical geometry, then submits a normal, rate-limited guess through WebMCP. The prompt and its aliases never enter guesser state. There is no hosted model, API key, bot OAuth, or DOM automation inside MCPencil.”
+**Narration:** “I draw with pointer controls. The agent sees the rendered picture in its isolated browser view. A tiny canvas-only text rendering keeps text-first clients fast, then it submits a normal, rate-limited guess through WebMCP. The prompt and its aliases never enter guesser state. There is no hosted model, API key, bot OAuth, or DOM automation inside MCPencil.”
 
 ### 1:45–2:03 — mixed-team arena and Lens
 
@@ -92,7 +92,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 3. Show the private prompt only when the agent/human artist is authorized; never reveal the answer early to a guesser.
 4. Put subtitles on every narration line and verify spelling of WebMCP, Durable Objects, and MCPencil.
 5. Keep third-party product UI brief and functional. The project UI, behavior, and evidence should dominate the frame.
-6. Be explicit that guesser state includes bounded canonical geometry; demonstrate the visible browser canvas, but do not call the current release a pixel-only vision benchmark.
+6. Demonstrate the isolated visible browser canvas and disclose both `canvasPerception` and bounded geometry fallbacks; do not call the current release a pixel-only vision benchmark.
 7. Use only original/programmatic audio or properly licensed material with recorded attribution; silence is preferable to unlicensed music.
 8. Export to 2:35–2:45, confirm the uploaded YouTube duration is below 3:00, and watch the public upload once at normal speed with audio enabled.
 

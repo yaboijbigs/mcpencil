@@ -486,7 +486,12 @@
 
 .flipbook-turn-leaf {
   position: absolute;
-  inset: 0;
+  top: 0;
+  right: 0;
+  left: 0;
+  /* Cap the sheet near viewport height: a full scroll-height leaf rotated
+     toward the viewer would cross the perspective camera and get culled. */
+  height: min(100%, 135vh);
   z-index: 5;
   transform-origin: 50% -14px;
   transform-style: preserve-3d;
@@ -576,39 +581,41 @@
   filter: blur(4px);
 }
 
+/* Positive rotateX with a top origin lifts the free edge toward the viewer,
+   up and over the spiral, like a real artist's pad. */
 @keyframes leaf-flip-forward {
   0% {
     transform: rotateX(0deg);
     opacity: 1;
   }
   52% {
-    transform: rotateX(-98deg);
+    transform: rotateX(98deg);
     opacity: 1;
   }
   88% {
-    transform: rotateX(-168deg);
+    transform: rotateX(168deg);
     opacity: 1;
   }
   100% {
-    transform: rotateX(-180deg);
+    transform: rotateX(180deg);
     opacity: 0;
   }
 }
 
 @keyframes leaf-flip-back {
   0% {
-    transform: rotateX(-180deg);
+    transform: rotateX(180deg);
     opacity: 0;
   }
   10% {
     opacity: 1;
   }
   60% {
-    transform: rotateX(-70deg);
+    transform: rotateX(70deg);
     opacity: 1;
   }
   90% {
-    transform: rotateX(-4deg);
+    transform: rotateX(4deg);
     opacity: 1;
   }
   100% {
@@ -621,7 +628,10 @@
 
 .flipbook-cover {
   position: absolute;
-  inset: -8px -10px -12px;
+  top: -8px;
+  right: -10px;
+  left: -10px;
+  height: min(calc(100% + 20px), 135vh);
   z-index: 12;
   display: grid;
   place-items: center;
@@ -708,11 +718,11 @@
     opacity: 1;
   }
   60% {
-    transform: rotateX(-118deg);
+    transform: rotateX(118deg);
     opacity: 1;
   }
   100% {
-    transform: rotateX(-178deg);
+    transform: rotateX(178deg);
     opacity: 0;
   }
 }

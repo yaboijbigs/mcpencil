@@ -57,22 +57,23 @@ Use a clean browser profile and the production domain.
 
 - [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
-- [ ] Human creates Practice Pair, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent calls `play_mcpencil` and connects with a separate opaque identity.
-- [ ] The pasted agent URL remains exactly `invite=agent` with a `#webmcp` fragment; adjacent prose cannot become part of the query value.
+- [ ] Human creates Practice Pair, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent opens the `agent.mcpencil.com` invite, calls `play_mcpencil`, and connects with a separate opaque identity.
+- [ ] The pasted agent URL uses `https://agent.mcpencil.com/webmcp/rooms/{code}`, remains exactly `invite=agent` with a `#webmcp` fragment, and adjacent prose cannot become part of the query value.
+- [ ] Calling `play_mcpencil` from the already seated human document fails without joining and returns the exact separate agent invite.
 - [ ] A fresh agent uses its WebMCP-capable/in-app browser rather than a generic Chrome-control integration, then performs all game actions through page-exposed tools.
 - [ ] An unsupported browser reports that WebMCP is unavailable instead of clicking the join form or asking the human to dismiss unrelated browser UI.
 - [ ] Host changes to rounds and time per round appear for every connected player and survive a reload.
 - [ ] Non-host players can see the synchronized settings but cannot change them through either the UI or WebMCP.
 - [ ] Changing settings resets connected human ready states while agent seats remain auto-ready.
-- [ ] Round one assigns the companion agent as artist and the human as guesser.
+- [ ] Round one assigns the isolated agent seat as artist and the human as guesser.
 - [ ] The complete descriptor registry attaches once; the Lens lists only the agent-artist actions currently authorized, and the prompt event is masked.
 - [ ] Three or more `draw_stroke` calls each persist and broadcast separately, return distinct accepted versions, and appear as discrete rendered strokes; no multi-stroke burst appears. The acknowledgement need not prove that a remote browser has already painted the version.
 - [ ] Human correct guess ends the round and reveals the answer once.
-- [ ] Round two assigns the human as artist and companion agent as guesser.
+- [ ] Round two assigns the human as artist and the isolated agent seat as guesser.
 - [ ] On role reversal, the Lens removes artist actions from its actionable set; `submit_guesses` becomes actionable only after the human prompt is hidden and the opening stroke lands.
 - [ ] Calling a stable descriptor outside its current actionable set fails before local work, and a direct stale mutation is independently rejected by the room authority.
 - [ ] Human prompt is private and is removed on round end.
-- [ ] The rendered canvas remains visible in the visiting agent's browser context; `get_match_state` exposes only bounded canonical geometry/recent guesses (no prompt metadata); the agent calls `submit_guesses`, and every submitted candidate is visible live. Record this transparently rather than claiming a pixel-only vision test.
+- [ ] The rendered canvas remains visible in the isolated agent browser context; `get_match_state` exposes only the canvas-only `32 × 22` text raster, bounded canonical geometry, and recent guesses (no prompt metadata); the agent calls `submit_guesses`, and every submitted candidate is visible live. Record this transparently rather than claiming a pixel-only vision test.
 - [ ] Round result and final replay contain the complete exact guess transcript with player, declared origin, correctness, and timing.
 - [ ] Whole flow completes in 60–90 seconds without manual recovery.
 - [ ] A 6- or 8-round match completes without descriptor re-registration, a tool-configuration-limit warning, or loss of WebMCP access.

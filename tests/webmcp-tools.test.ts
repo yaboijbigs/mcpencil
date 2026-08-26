@@ -176,7 +176,10 @@ describe("registered WebMCP tool contracts", () => {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
-        location: { href: "https://mcpencil.com/?room=AB2DE&invite=agent" },
+        location: {
+          href: "https://mcpencil.com/?room=AB2DE&invite=agent",
+          origin: "https://mcpencil.com",
+        },
         setTimeout: globalThis.setTimeout.bind(globalThis),
         clearTimeout: globalThis.clearTimeout.bind(globalThis),
       },
@@ -230,6 +233,27 @@ describe("registered WebMCP tool contracts", () => {
     expect(modelContext.tool("submit_guesses").annotations).toEqual({
       untrustedContentHint: true,
     });
+    expect(modelContext.tool("get_match_state").description).toContain(
+      "rendered page/canvas as the primary picture",
+    );
+    expect(modelContext.tool("get_match_state").description).toContain(
+      "canvasPerception is a fast 32x22 text raster fallback",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "browser/page visual viewing or screenshot perception",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "first meaningful drawing",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "only when a newer canvasVersion materially changes the scene",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "do not take a screenshot after every stroke",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "canvasPerception text raster before bounded canvasGeometry",
+    );
     expect(latestHookResult?.registeredTools).toHaveLength(10);
     expect(latestHookResult?.registeredTools.find(({ name }) => name === "get_match_state")).toMatchObject({
       name: "get_match_state",
@@ -524,6 +548,18 @@ describe("registered WebMCP tool contracts", () => {
       canvasVersion: 1,
       nextAction: { tool: "submit_guesses" },
     });
+    expect(secondState.guidance).toEqual(expect.stringContaining(
+      "rendered page/canvas visual as the primary picture",
+    ));
+    expect(secondState.guidance).toEqual(expect.stringContaining(
+      "canvasPerception is a fast 32x22",
+    ));
+    expect(secondState).toMatchObject({
+      canvasPerception: { format: "ascii-raster-v1", width: 32, height: 22 },
+    });
+    expect((secondState.nextAction as Record<string, unknown>).instruction).toEqual(
+      expect.stringContaining("Visually inspect the rendered page/canvas first"),
+    );
 
     const guessResult = await modelContext.tool("submit_guesses").execute({
       guesses: ["camera"],
@@ -573,6 +609,79 @@ describe("registered WebMCP tool contracts", () => {
       "ready_next",
       "submit_guess",
     ]);
+  });
+
+  it("joins successfully from a fresh isolated agent view", async () => {
+    Object.assign(window.location, {
+      href: "https://agent.mcpencil.com/webmcp/rooms/AB2DE?invite=agent#webmcp",
+      origin: "https://agent.mcpencil.com",
+    });
+    const joinedSnapshot = practiceSnapshot({
+      phase: "lobby",
+      artistSeatId: null,
+      endsAt: null,
+      seats: [agent],
+    });
+    const response: JoinRoomResponse = {
+      roomCode: "AB2DE",
+      seatId: agent.id,
+      token: "t".repeat(32),
+      snapshot: joinedSnapshot,
+    };
+    const joinMatch = vi.fn(async () => response);
+    const props: HookProps = {
+      snapshot: null,
+      seatId: null,
+      command: vi.fn(async () => commandResult()),
+      privatePrompt: vi.fn(async () => ({ prompt: "camera", category: "objects", roundIndex: 0 })),
+      startPractice: vi.fn(async () => undefined),
+      joinMatch,
+      humanHostDocument: false,
+    };
+    const renderer = await mountHook(props);
+
+    const result = await modelContext.tool("play_mcpencil").execute({}, toolSignal()) as Record<string, unknown>;
+    expect(result).toMatchObject({
+      accepted: true,
+      status: "joined_and_ready",
+      roomCode: "AB2DE",
+      yourSeatId: agent.id,
+    });
+    expect(joinMatch).toHaveBeenCalledOnce();
+    expect(joinMatch).toHaveBeenCalledWith(expect.objectContaining({
+      roomCode: "AB2DE",
+      controller: "agent",
+    }));
+
+    await act(async () => renderer.unmount());
+  });
+
+  it("rejects play_mcpencil on a seated human host and returns the exact isolated invite", async () => {
+    const humanLobby = practiceSnapshot({
+      phase: "lobby",
+      artistSeatId: null,
+      endsAt: null,
+      seats: [human],
+    });
+    const joinMatch = vi.fn(async () => undefined);
+    const props: HookProps = {
+      snapshot: humanLobby,
+      seatId: null,
+      humanHostDocument: true,
+      command: vi.fn(async () => commandResult()),
+      privatePrompt: vi.fn(async () => ({ prompt: "camera", category: "objects", roundIndex: 0 })),
+      startPractice: vi.fn(async () => undefined),
+      joinMatch,
+    };
+    const renderer = await mountHook(props);
+
+    expect(latestHookResult?.toolNames).toContain("play_mcpencil");
+    await expect(modelContext.tool("play_mcpencil").execute({}, toolSignal())).rejects.toThrow(
+      "Open the exact agent invite in a separate agent tab or view: <https://agent.mcpencil.com/webmcp/rooms/AB2DE?invite=agent#webmcp>",
+    );
+    expect(joinMatch).not.toHaveBeenCalled();
+
+    await act(async () => renderer.unmount());
   });
 
   it("forwards execution cancellation to a registered handler", async () => {

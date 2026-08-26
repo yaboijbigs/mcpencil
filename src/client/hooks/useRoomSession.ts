@@ -23,23 +23,31 @@ import {
 import type { ReplayPayload } from "../api";
 import { roomCodeFromUrl } from "../invite";
 
-const STORAGE_KEY = "mcpencil.seat.v3";
+const STORAGE_KEY = "mcpencil.seat.v4";
+const LEGACY_STORAGE_KEY = "mcpencil.seat.v3";
 
 interface StoredSession {
   primary: SeatCredentials;
-  companion?: SeatCredentials;
 }
 
-function readStoredCredentials(): StoredSession | null {
+type SessionStorageLike = Pick<Storage, "getItem" | "setItem" | "removeItem">;
+
+export function loadStoredCredentials(storage: SessionStorageLike, href: string): StoredSession | null {
   try {
-    const parsed = JSON.parse(sessionStorage.getItem(STORAGE_KEY) ?? "null") as StoredSession | null;
+    const current = storage.getItem(STORAGE_KEY);
+    const legacy = current === null ? storage.getItem(LEGACY_STORAGE_KEY) : null;
+    const parsed = JSON.parse(current ?? legacy ?? "null") as (StoredSession & { companion?: SeatCredentials }) | null;
     if (!parsed?.primary?.roomCode || !parsed.primary.seatId || !parsed.primary.token) return null;
-    const linkedRoom = roomCodeFromUrl(new URL(window.location.href));
+    const linkedRoom = roomCodeFromUrl(new URL(href));
     if (linkedRoom && linkedRoom !== parsed.primary.roomCode) {
-      sessionStorage.removeItem(STORAGE_KEY);
+      storage.removeItem(STORAGE_KEY);
+      storage.removeItem(LEGACY_STORAGE_KEY);
       return null;
     }
-    return parsed;
+    const isolated = { primary: parsed.primary };
+    storage.setItem(STORAGE_KEY, JSON.stringify(isolated));
+    storage.removeItem(LEGACY_STORAGE_KEY);
+    return isolated;
   } catch {
     return null;
   }
@@ -52,7 +60,6 @@ function saveCredentials(credentials: StoredSession | null) {
 
 export interface RoomSession {
   credentials: SeatCredentials | null;
-  companion: SeatCredentials | null;
   snapshot: RoomSnapshot | null;
   loading: boolean;
   connected: boolean;
@@ -63,10 +70,6 @@ export interface RoomSession {
     controller: ControllerType;
   }): Promise<void>;
   join(
-    roomCode: string,
-    input: { name: string; team?: TeamId; controller: ControllerType },
-  ): Promise<JoinRoomResponse>;
-  joinAgent(
     roomCode: string,
     input: { name: string; team?: TeamId; controller: ControllerType },
   ): Promise<JoinRoomResponse>;
@@ -82,9 +85,8 @@ export interface RoomSession {
 
 export function useRoomSession(): RoomSession {
   const tabIdentity = useRef({ id: crypto.randomUUID(), startedAt: Date.now() });
-  const stored = useRef(readStoredCredentials());
+  const stored = useRef(loadStoredCredentials(sessionStorage, window.location.href));
   const [credentials, setCredentials] = useState<SeatCredentials | null>(() => stored.current?.primary ?? null);
-  const [companion, setCompanion] = useState<SeatCredentials | null>(() => stored.current?.companion ?? null);
   const [snapshot, setSnapshot] = useState<RoomSnapshot | null>(null);
   const [loading, setLoading] = useState(Boolean(credentials));
   const [connected, setConnected] = useState(false);
@@ -93,8 +95,6 @@ export function useRoomSession(): RoomSession {
   snapshotRef.current = snapshot;
   const credentialsRef = useRef(credentials);
   credentialsRef.current = credentials;
-  const companionRef = useRef(companion);
-  companionRef.current = companion;
   const canvasVersionRef = useRef(0);
   const versionRoomRef = useRef<string | null>(null);
   if (snapshot?.roomCode !== versionRoomRef.current) {
@@ -112,9 +112,7 @@ export function useRoomSession(): RoomSession {
     };
     saveCredentials({ primary: next });
     credentialsRef.current = next;
-    companionRef.current = null;
     setCredentials(next);
-    setCompanion(null);
     setSnapshot(response.snapshot);
     setError(null);
   }, []);
@@ -150,36 +148,6 @@ export function useRoomSession(): RoomSession {
       }
     },
     [adopt],
-  );
-
-  const joinAgent = useCallback<RoomSession["joinAgent"]>(
-    async (roomCode, input) => {
-      const primary = credentialsRef.current;
-      if (!primary || primary.roomCode !== roomCode.trim().toUpperCase()) {
-        throw new ApiError("Open the matching room as its human host first.", "room_host_missing", 409);
-      }
-      setLoading(true);
-      try {
-        const response = await joinRoom(roomCode.trim().toUpperCase(), input);
-        const nextCompanion = {
-          roomCode: response.roomCode,
-          seatId: response.seatId,
-          token: response.token,
-        };
-        saveCredentials({ primary, companion: nextCompanion });
-        companionRef.current = nextCompanion;
-        setCompanion(nextCompanion);
-        setSnapshot(response.snapshot);
-        setError(null);
-        return response;
-      } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Could not join the agent to this room.");
-        throw reason;
-      } finally {
-        setLoading(false);
-      }
-    },
-    [],
   );
 
   const refresh = useCallback(
@@ -227,7 +195,7 @@ export function useRoomSession(): RoomSession {
   }, []);
 
   const agentCommand = useCallback(async (roomCommand: RoomCommand, signal?: AbortSignal) => {
-    const current = companionRef.current ?? credentialsRef.current;
+    const current = credentialsRef.current;
     if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
     try {
       const outgoing = withLatestCanvasVersion(roomCommand, canvasVersionRef.current);
@@ -243,7 +211,7 @@ export function useRoomSession(): RoomSession {
   }, []);
 
   const agentPrivatePrompt = useCallback(async (signal?: AbortSignal) => {
-    const current = companionRef.current ?? credentialsRef.current;
+    const current = credentialsRef.current;
     if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
     return getPrivatePrompt(current.roomCode, current.token, signal);
   }, []);
@@ -255,22 +223,18 @@ export function useRoomSession(): RoomSession {
   }, []);
 
   const leave = useCallback(() => {
-    const seats = [companion, credentialsRef.current].filter(
-      (seat): seat is SeatCredentials => seat !== null,
-    );
-    for (const seat of seats) void leaveRoom(seat.roomCode, seat.token).catch(() => undefined);
+    const seat = credentialsRef.current;
+    if (seat) void leaveRoom(seat.roomCode, seat.token).catch(() => undefined);
     saveCredentials(null);
     setCredentials(null);
-    setCompanion(null);
     setSnapshot(null);
     setConnected(false);
     setError(null);
-  }, [companion]);
+  }, []);
 
   const dropCopiedSession = useCallback(() => {
     saveCredentials(null);
     setCredentials(null);
-    setCompanion(null);
     setSnapshot(null);
     setConnected(false);
     setError("That seat is already active in another tab. Join this tab as a new player.");
@@ -280,7 +244,7 @@ export function useRoomSession(): RoomSession {
     if (!credentials || typeof BroadcastChannel === "undefined") return;
     const channel = new BroadcastChannel("mcpencil-seat-claims-v1");
     const identity = tabIdentity.current;
-    const seatIds = [credentials.seatId, companion?.seatId].filter((id): id is string => Boolean(id));
+    const seatIds = [credentials.seatId];
     const priority = `${String(identity.startedAt).padStart(16, "0")}:${identity.id}`;
     channel.addEventListener("message", (event: MessageEvent<unknown>) => {
       if (typeof event.data !== "object" || event.data === null) return;
@@ -307,7 +271,7 @@ export function useRoomSession(): RoomSession {
     });
     channel.postMessage({ type: "probe", tabId: identity.id, priority, seatIds });
     return () => channel.close();
-  }, [companion?.seatId, credentials?.seatId, dropCopiedSession]);
+  }, [credentials?.seatId, dropCopiedSession]);
 
   useEffect(() => {
     if (!credentials) {
@@ -357,25 +321,19 @@ export function useRoomSession(): RoomSession {
       handleEvent,
       setConnected,
     );
-    const closeCompanion = companion
-      ? roomSocket(companion.roomCode, companion.token, handleEvent, () => undefined)
-      : undefined;
     return () => {
       closePrimary();
-      closeCompanion?.();
     };
-  }, [companion?.roomCode, companion?.token, credentials?.roomCode, credentials?.token]);
+  }, [credentials?.roomCode, credentials?.token]);
 
   return {
     credentials,
-    companion,
     snapshot,
     loading,
     connected,
     error,
     create,
     join,
-    joinAgent,
     command,
     agentCommand,
     privatePrompt,

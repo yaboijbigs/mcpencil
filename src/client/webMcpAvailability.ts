@@ -1,4 +1,5 @@
 import { canGuess, isArtist, type RoomSnapshot, type VectorPrimitive } from "../shared/game";
+import { buildCanvasPerception } from "./canvasPerception";
 
 export const WEBMCP_REGISTERED_TOOL_NAMES = [
   "get_match_state",
@@ -50,6 +51,8 @@ export function webMcpToolNames(
 
 const PLAY_INTENT = "play_mcpencil_with_user";
 const COMPLETION_CONDITION = "Use MCPencil's page-exposed WebMCP tools for every game action and continue until phase is match-end. Loading the page, joining, or waiting is not completion.";
+const MAX_COMPACT_GEOMETRY_EVENTS = 24;
+const MAX_COMPACT_POINTS = 6;
 
 export function compactWebMcpState(
   snapshot: RoomSnapshot | null,
@@ -139,21 +142,30 @@ export function compactWebMcpState(
   };
   if (seat?.controller !== "agent" || role !== "guesser") return baseState;
   const roundCanvas = snapshot.canvas.filter((event) => event.roundIndex === snapshot.roundIndex);
-  const boundedCanvas = roundCanvas.length <= 60
+  const boundedCanvas = roundCanvas.length <= MAX_COMPACT_GEOMETRY_EVENTS
     ? roundCanvas
-    : [...roundCanvas.slice(0, 20), ...roundCanvas.slice(-40)];
+    : [...roundCanvas.slice(0, 8), ...roundCanvas.slice(-16)];
   const canvasGeometry = boundedCanvas.map((event) => compactPrimitive(event.primitive));
+  const canvasPerception = roundCanvas.length > 0
+    ? buildCanvasPerception(roundCanvas, snapshot.roundIndex)
+    : null;
   const recentGuesses = snapshot.guesses
     .filter((guess) => guess.roundIndex === snapshot.roundIndex)
     .slice(-8)
     .map(({ guess, isCorrect }) => ({ text: guess, correct: isCorrect }));
   return {
     ...baseState,
+    canvasPerception,
+    canvasGeometryInfo: {
+      includedStrokes: boundedCanvas.length,
+      totalStrokes: roundCanvas.length,
+      strategy: roundCanvas.length > boundedCanvas.length ? "first-8-and-latest-16" : "all",
+    },
     canvasGeometry,
     recentGuesses,
     guidance: canvasGeometry.length > 0
-      ? "Inspect the rendered canvas together with this bounded canonical canvasGeometry. Submit 1-3 ordered, distinct candidates immediately. Reconsider the whole drawing on every newer canvasVersion and do not repeat recentGuesses."
-      : "Keep get_match_state pending for the first geometry. Inspect the rendered canvas and disclosed canvasGeometry, then submit candidates immediately when it arrives.",
+      ? "Treat the rendered page/canvas visual as the primary picture. Visually inspect it at the first meaningful drawing and again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. canvasPerception is a fast 32x22 top-to-bottom text raster for clients without page vision; use canvasGeometry only as a final cross-check. Submit 1-3 ordered, distinct candidates immediately and do not repeat recentGuesses."
+      : "Wait for the first meaningful drawing. Then visually inspect the rendered page/canvas as the primary picture and submit candidates immediately. If page vision is unavailable, use canvasPerception before raw canvasGeometry; do not take a screenshot after every stroke.",
   };
 }
 
@@ -222,7 +234,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
     return {
       nextAction: {
         tool: "submit_guesses",
-        instruction: "Visually inspect the rendered canvas together with the disclosed bounded canvasGeometry, then immediately submit 1-3 ordered, distinct candidates; reconsider after every canvasVersion change.",
+        instruction: "Visually inspect the rendered page/canvas first at the first meaningful drawing, then immediately submit 1-3 ordered, distinct candidates. Inspect again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. If page vision is unavailable, read canvasPerception as the fast picture and use canvasGeometry only as a final cross-check.",
       },
       urgency: "immediate",
     };
@@ -302,9 +314,9 @@ function compactPrimitive(primitive: VectorPrimitive): VectorPrimitive {
 }
 
 function samplePoints(points: Array<{ x: number; y: number }>) {
-  if (points.length <= 10) return points.map(({ x, y }) => ({ x: whole(x), y: whole(y) }));
-  return Array.from({ length: 10 }, (_, index) => {
-    const point = points[Math.round(index * (points.length - 1) / 9)]!;
+  if (points.length <= MAX_COMPACT_POINTS) return points.map(({ x, y }) => ({ x: whole(x), y: whole(y) }));
+  return Array.from({ length: MAX_COMPACT_POINTS }, (_, index) => {
+    const point = points[Math.round(index * (points.length - 1) / (MAX_COMPACT_POINTS - 1))]!;
     return { x: whole(point.x), y: whole(point.y) };
   });
 }

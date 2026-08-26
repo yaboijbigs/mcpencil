@@ -13,6 +13,10 @@
     {
       "pattern": "www.mcpencil.com",
       "custom_domain": true
+    },
+    {
+      "pattern": "agent.mcpencil.com",
+      "custom_domain": true
     }
   ],
   "assets": {

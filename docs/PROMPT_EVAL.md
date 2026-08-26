@@ -2,17 +2,18 @@
 
 ## Prompt design principles
 
-MCPencil prompts should reward composition, not text spelling or cultural trivia. Every card must be safe for a general audience, understandable without brand knowledge, drawable with the six allowed vector primitives, and visually judgeable on a `1000 × 700` canvas.
+MCPencil prompts should reward immediate object recognition, not text spelling, cultural trivia, or decoding a multi-part scene. Every card must be safe for a general audience, understandable without brand knowledge, drawable with the six allowed vector primitives, and visually judgeable on a `1000 × 700` canvas.
 
 The deck is original to this project. Common nouns are facts and not proprietary game content; the combinations, categories, accepted whole-answer aliases, and rejected near-misses were authored for MCPencil during the challenge period.
 
 Rules for production cards:
 
-- 2–6 meaningful words; no trademarks, public figures, copyrighted characters, flags, or logos;
+- exactly one lowercase alphabetic canonical word naming a concrete noun; standard closed compounds such as `lighthouse` and `paintbrush` are allowed;
+- no action, relationship, required emotion, pose, costume, modifier, trademark, public figure, copyrighted character, flag, or logo;
 - no answer that is best communicated by writing letters or numbers;
 - no color-dependent answer;
-- one dominant subject for easy cards, one relation or action for medium cards, two interacting subjects for hard cards;
-- aliases represent ordinary full-answer wording differences, never a shortcut that drops a required subject, action, or modifier;
+- one dominant, independently recognizable subject on every card;
+- aliases represent the same whole object through ordinary plurals, regional names, alternate spellings, or true synonyms—never a broader category;
 - every card records tempting rejected answers so incomplete guesses stay rejected in automated tests;
 - avoid near-duplicate answers within one match;
 - do not expose category or aliases to guessers before reveal;
@@ -24,26 +25,26 @@ This set is frozen for repeatable release evaluation. It should not be used as t
 
 | ID | Canonical answer | Category | Difficulty | Curated aliases | Visual anchors |
 |---|---|---|---|---|---|
-| G01 | lighthouse | places | easy | light house | tower, beam, water |
-| G02 | hot air balloon | travel | easy | air balloon | large envelope, basket, sky |
-| G03 | robot watering a plant | actions | medium | robot watering plant | robot, watering can, sprout |
-| G04 | raccoon stealing a sandwich | animals | hard | raccoon with stolen sandwich; sandwich thief raccoon | mask face, striped tail, sandwich, reaching |
-| G05 | astronaut walking a dog | space | medium | astronaut dog walk; space dog walk | helmet, leash, dog, stars |
-| G06 | cactus wearing a hat | silly things | medium | cactus with cowboy hat; cowboy cactus | cactus arms, pot/desert, wide hat |
-| G07 | octopus playing drums | music | hard | drumming octopus; octopus drummer | eight arms, drum kit, sticks |
-| G08 | toaster at the beach | odd places | medium | beach toaster; toaster on a beach | toaster, toast slots, sun, waves/sand |
-| G09 | moon fishing for a star | space | hard | moon catching a star; fishing moon with star | crescent, rod, line, star |
-| G10 | bicycle with square wheels | impossible machines | medium | bike with square wheels; square wheel bicycle | bicycle frame, two squares |
-| G11 | penguin delivering pizza | jobs | hard | pizza delivery penguin; penguin pizza courier | penguin body, pizza box/slice, motion |
-| G12 | cloud using an umbrella | weather | medium | cloud with umbrella; umbrella cloud | cloud, rain, umbrella beneath/held |
+| G01 | lighthouse | places | medium | light house | tower, lantern room, beam |
+| G02 | rabbit | animals | easy | bunny | long ears, compact body, tail |
+| G03 | penguin | animals | easy | penguins | flippers, white belly, feet |
+| G04 | camera | objects | easy | cameras | body, lens, shutter button |
+| G05 | cactus | nature | easy | cacti | trunk, raised arms, spikes |
+| G06 | volcano | nature | easy | volcanoes | mountain cone, crater, eruption |
+| G07 | guitar | objects | medium | guitars | body, sound hole, neck, strings |
+| G08 | robot | characters | easy | automaton | geometric head/body, joints |
+| G09 | turtle | animals | easy | tortoise | shell, head, four legs |
+| G10 | bicycle | objects | medium | bike | two wheels, frame, handlebars |
+| G11 | octopus | animals | medium | octopuses | round head, eight arms |
+| G12 | castle | places | medium | fortress | towers, battlements, gate |
 
 The answer matcher additionally handles case, punctuation, repeated spacing, accents, and a one-character typo for sufficiently long normalized answers. The recorded test result must distinguish an accepted canonical/alias/typo from a semantic near-miss.
 
 ## Production deck balance
 
-The production deck contains at least 150 server-side cards. Practice Pair draws from at least 100 vetted easy/medium cards, preventing the tiny-pool repetition that made separate practice matches feel identical while keeping the judge path legible. Both modes deal without replacement inside a match.
+The production deck contains 174 server-side single-word noun cards. Practice Pair draws from 139 vetted easy/medium cards, preventing the tiny-pool repetition that made separate practice matches feel identical while keeping the judge path legible. Both modes deal without replacement inside a match.
 
-Every canonical answer and accepted alias is normalized-unique and tested as correct. Every card also carries one or more rejected near-misses that are tested as incorrect. For example, `sleepy turtle` accepts `sleeping turtle`, `tired turtle`, and `drowsy turtle`, while bare `turtle` does not count.
+Every canonical answer and accepted alias is normalized-unique and tested as correct. Every card also carries at least two rejected near-misses that are tested as incorrect. For example, `rabbit` accepts `bunny`, while related drawings or broad guesses such as `cat` and `hamster` do not count.
 
 ## Evaluation protocol
 
@@ -80,12 +81,12 @@ Tag every failed round with one primary cause:
 - `MATCHER`: a reasonable equivalent answer was rejected;
 - `TIMING`: correct intent arrived after expiry;
 - `SYNC`: canvas/state seen by players diverged;
-- `PROMPT`: card depended on text, culture, color, or an unclear relationship.
+- `PROMPT`: card depended on text, culture, color, or was not a concrete recognizable noun.
 
 Any `CONTRACT`, `SYNC`, secrecy, or authorization failure blocks release. Content failures may lead to a documented card replacement, but never silently change the golden set mid-run; increment its version and rerun all cards.
 
 ## Versioning
 
-Golden set version: **1.0 — August 25, 2026**.
+Golden set version: **2.0 — August 26, 2026**. Version 2 replaced multi-part action prompts with production single-word nouns after live human-agent playtesting showed that required actions and modifiers slowed both drawing and guessing.
 
 If a card changes, record the old and new wording, reason, date, and commit. Store result artifacts without raw model reasoning or private prompt transport logs.

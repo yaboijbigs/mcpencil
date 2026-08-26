@@ -18,7 +18,7 @@ import {
   type RoomSnapshot,
   type TeamId,
 } from "../../shared/game";
-import { roomCodeFromUrl } from "../invite";
+import { roomCodeFromUrl, separateAgentViewInstruction } from "../invite";
 import {
   WEBMCP_REGISTERED_TOOL_NAMES,
   compactWebMcpRoundResult,
@@ -84,6 +84,7 @@ interface UseWebMcpToolsOptions {
   seatId: string | null;
   enabled?: boolean;
   guessesEnabled?: boolean;
+  humanHostDocument?: boolean;
   command(command: RoomCommand, signal?: AbortSignal): Promise<CommandResult>;
   privatePrompt(signal?: AbortSignal): Promise<PrivatePrompt>;
   startPractice(name: string): Promise<void>;
@@ -140,7 +141,7 @@ interface StateWaiter {
   reject: (reason: unknown) => void;
 }
 
-export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnabled = true, command, privatePrompt, startPractice, joinMatch }: UseWebMcpToolsOptions) {
+export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnabled = true, humanHostDocument = false, command, privatePrompt, startPractice, joinMatch }: UseWebMcpToolsOptions) {
   const supported = Boolean(document.modelContext);
   const [invocations, setInvocations] = useState<LensInvocation[]>([]);
   const [registeredToolNames, setRegisteredToolNames] = useState<Set<string>>(() => new Set());
@@ -150,8 +151,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   snapshotRef.current = snapshot;
   const seatIdRef = useRef(seatId);
   seatIdRef.current = seatId;
-  const actionsRef = useRef({ command, privatePrompt, startPractice, joinMatch });
-  actionsRef.current = { command, privatePrompt, startPractice, joinMatch };
+  const actionsRef = useRef({ command, privatePrompt, startPractice, joinMatch, humanHostDocument });
+  actionsRef.current = { command, privatePrompt, startPractice, joinMatch, humanHostDocument };
   const versionRoomRef = useRef<string | null>(snapshot?.roomCode ?? null);
   const versionRef = useRef(snapshot?.canvasVersion ?? 0);
   const snapshotRoomCode = snapshot?.roomCode ?? null;
@@ -314,7 +315,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     tool({
       name: "get_match_state",
       title: "Inspect MCPencil match",
-      description: "Canonical page-exposed WebMCP continuation state. Before joining, it identifies play_mcpencil as the entry action. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between turns, pass afterRevision and waitMs 25000. Guessers also receive compact canvasGeometry and recentGuesses.",
+      description: "Canonical page-exposed WebMCP continuation state. Before joining, it identifies play_mcpencil as the entry action. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between turns, pass afterRevision and waitMs 25000. Guessers should visually inspect the rendered page/canvas as the primary picture; canvasPerception is a fast 32x22 text raster fallback and compact canvasGeometry is only a final cross-check.",
       inputSchema: {
         type: "object",
         properties: {
@@ -384,7 +385,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       tool({
         name: "play_mcpencil",
         title: "Join this room and play via WebMCP",
-        description: "The complete page-exposed WebMCP entry point when a user asks you to play or opens an MCPencil room URL. Call with {} immediately after the page loads. It joins the current room as an AI player, readies the seat, and returns nextAction. Continue through MCPencil's page WebMCP tools until phase is match-end.",
+        description: "The complete page-exposed WebMCP entry point when a user asks you to play or opens an MCPencil room URL. Call with {} immediately after the page loads. It joins the current room as an AI player, readies the seat, and returns nextAction. Continue through MCPencil's page WebMCP tools until phase is match-end. The agent must use a separate agent tab or view; invoking this from an already seated human player's document returns the exact isolated agent invite instead of creating a same-page companion.",
         inputSchema: {
           type: "object",
           properties: {
@@ -406,6 +407,9 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
             : null;
           const roomCode = parsed.roomCode ?? currentLobbyCode ?? roomCodeFromUrl(new URL(window.location.href));
           if (!roomCode) throw new Error("roomCode is required when the page URL does not identify a valid room.");
+          if (actionsRef.current.humanHostDocument) {
+            throw new Error(separateAgentViewInstruction(roomCode, window.location.origin));
+          }
           const name = parsed.name ?? defaultAgentName();
           const controller = "agent";
           const response = await actionsRef.current.joinMatch({ ...parsed, roomCode, name, controller });
@@ -555,7 +559,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 
   definitions.push(tool({
     name: "submit_guesses", title: "Submit up to three visible guesses",
-    description: "Inspect the rendered canvas and the disclosed bounded canonical canvasGeometry, then immediately submit 1-3 concise, ordered, distinct candidates. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer. After an incorrect result, reconsider the whole drawing when canvasVersion changes instead of fixating on the first idea.",
+    description: "Use browser/page visual viewing or screenshot perception to inspect the rendered canvas as the primary picture, then immediately submit 1-3 concise, ordered, distinct candidates. Inspect at the first meaningful drawing and again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. If page vision is unavailable, use the 32x22 canvasPerception text raster before bounded canvasGeometry. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer.",
     inputSchema: {
       type: "object",
       properties: {
@@ -605,11 +609,11 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
           : {
               tool: "get_match_state",
               arguments: { afterRevision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0, waitMs: 25_000 },
-              instruction: "Wait for newer geometry, inspect the whole canvas again, and continue guessing.",
+              instruction: "Wait for a newer canvasVersion that materially changes the scene, visually inspect the whole rendered canvas again, and continue guessing. If page vision is unavailable, use canvasPerception before raw canvasGeometry.",
             },
         guidance: correct
           ? "Correct. The round is over, but the match is not complete; continue with nextAction."
-          : `All ${attempts.length} guesses were displayed. Wait for a newer canvasVersion, visually inspect the full rendered canvas again, then submit new candidates.`,
+          : `All ${attempts.length} guesses were displayed. Wait until a newer canvasVersion materially changes the scene, visually inspect the full rendered canvas again, then submit new candidates. Do not take a screenshot after every stroke; if page vision is unavailable, use canvasPerception before raw canvasGeometry.`,
       };
     }, (output) => `${output.correct ? "Correct" : `${output.attempts.length} guesses displayed`}; canvas v${output.canvasVersion}`),
   }));

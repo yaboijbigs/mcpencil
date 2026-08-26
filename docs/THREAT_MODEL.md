@@ -44,7 +44,8 @@ Controls:
 - the private prompt path verifies the token hash, active seat, artist role, phase, and round;
 - raw prompts are never included in activity/Lens entries or application logs;
 - generic error codes do not interpolate answers;
-- every human-artist round keeps a same-page companion agent's `submit_guesses` non-actionable until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
+- every human-artist round keeps `submit_guesses` non-actionable until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
+- production agents join through a separate `agent.mcpencil.com` origin and document, so browser visual observation cannot include the human artist's private-prompt DOM;
 - tests recursively scan every pre-reveal shared payload for the answer and known aliases.
 
 ### Seat impersonation or token theft

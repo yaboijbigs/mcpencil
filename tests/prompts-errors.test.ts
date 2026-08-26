@@ -11,7 +11,7 @@ import {
   zodIssues,
 } from "../src/worker/errors";
 
-describe("original prompt deck", () => {
+describe("single-word prompt deck", () => {
   it("contains a large, normalized-unique deck and Practice pool", () => {
     expect(PROMPT_DECK.length).toBeGreaterThanOrEqual(150);
     expect(PRACTICE_PROMPTS.length).toBeGreaterThanOrEqual(100);
@@ -24,10 +24,15 @@ describe("original prompt deck", () => {
     for (const card of PROMPT_DECK) {
       expect(card.prompt.length).toBeGreaterThan(2);
       expect(card.prompt.length).toBeLessThanOrEqual(40);
+      expect(card.prompt, `${card.prompt} must be one lowercase alphabetic word`).toMatch(/^[a-z]+$/);
+      expect(normalizeGuess(card.prompt)).toBe(card.prompt);
       expect(card.category.length).toBeGreaterThan(0);
       expect(card.aliases.length).toBeGreaterThan(0);
       expect(card.rejectedAnswers.length).toBeGreaterThan(0);
     }
+
+    expect(PROMPT_DECK.map((card) => card.prompt)).not.toContain("penguin building an igloo");
+    expect(PROMPT_DECK.map((card) => card.prompt)).not.toContain("rabbit painting eggs");
   });
 
   it("keeps every accepted spelling globally unambiguous", () => {
@@ -78,15 +83,17 @@ describe("original prompt deck", () => {
     }
   });
 
-  it("accepts sleepy turtle equivalents but requires the sleepy descriptor", () => {
+  it("accepts vetted alternate nouns while rejecting related but incorrect objects", () => {
     const card = (prompt: string) => PROMPT_DECK.find((candidate) => candidate.prompt === prompt)!;
-    const turtle = card("sleepy turtle");
-    expect(isGuessCorrect("sleepy turtle", turtle.prompt, turtle.aliases)).toBe(true);
-    expect(isGuessCorrect("sleeping turtle", turtle.prompt, turtle.aliases)).toBe(true);
-    expect(isGuessCorrect("tired turtle", turtle.prompt, turtle.aliases)).toBe(true);
-    expect(isGuessCorrect("drowsy turtle", turtle.prompt, turtle.aliases)).toBe(true);
-    expect(isGuessCorrect("turtle", turtle.prompt, turtle.aliases)).toBe(false);
-    expect(isGuessCorrect("slow turtle", turtle.prompt, turtle.aliases)).toBe(false);
+    const rabbit = card("rabbit");
+    expect(isGuessCorrect("rabbit", rabbit.prompt, rabbit.aliases)).toBe(true);
+    expect(isGuessCorrect("bunny", rabbit.prompt, rabbit.aliases)).toBe(true);
+    expect(isGuessCorrect("cat", rabbit.prompt, rabbit.aliases)).toBe(false);
+    expect(isGuessCorrect("hamster", rabbit.prompt, rabbit.aliases)).toBe(false);
+
+    const flashlight = card("flashlight");
+    expect(isGuessCorrect("torch", flashlight.prompt, flashlight.aliases)).toBe(true);
+    expect(isGuessCorrect("lamp", flashlight.prompt, flashlight.aliases)).toBe(false);
   });
 });
 

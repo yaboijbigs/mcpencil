@@ -680,23 +680,71 @@ describe("dynamic WebMCP availability", () => {
       })),
     });
     const state = compactWebMcpState(agentSnapshot, "guesser") as {
+      canvasPerception: { format: string; width: number; height: number; rows: string[] };
+      canvasGeometryInfo: { includedStrokes: number; totalStrokes: number; strategy: string };
       canvasGeometry: VectorPrimitive[];
       recentGuesses: Array<{ text: string; correct: boolean }>;
       guidance: string;
       nextAction: { tool: string; instruction: string };
       urgency: string;
     };
-    expect(state.canvasGeometry).toHaveLength(60);
+    expect(state.canvasPerception).toMatchObject({ format: "ascii-raster-v1", width: 32, height: 22 });
+    expect(state.canvasPerception.rows).toHaveLength(22);
+    expect(state.canvasGeometryInfo).toEqual({
+      includedStrokes: 24,
+      totalStrokes: 70,
+      strategy: "first-8-and-latest-16",
+    });
+    expect(state.canvasGeometry).toHaveLength(24);
     expect(state.canvasGeometry[0]).toMatchObject({ type: "line", x1: 0 });
-    expect(state.canvasGeometry[20]).toMatchObject({ type: "line", x1: 30 });
+    expect(state.canvasGeometry[8]).toMatchObject({ type: "line", x1: 54 });
     expect(state.canvasGeometry.at(-1)).toMatchObject({ type: "polyline", points: expect.any(Array) });
-    expect((state.canvasGeometry.at(-1) as Extract<VectorPrimitive, { type: "polyline" }>).points).toHaveLength(10);
+    expect((state.canvasGeometry.at(-1) as Extract<VectorPrimitive, { type: "polyline" }>).points).toHaveLength(6);
     expect(state.recentGuesses.map(({ text }) => text)).toEqual(Array.from({ length: 8 }, (_, index) => `answer ${index + 2}`));
+    expect(state.guidance).toContain("rendered page/canvas visual as the primary picture");
+    expect(state.guidance).toContain("only when a newer canvasVersion materially changes the scene");
+    expect(state.guidance).toContain("do not take a screenshot after every stroke");
+    expect(state.guidance).toContain("canvasPerception is a fast 32x22");
+    expect(state.guidance).toContain("canvasGeometry only as a final cross-check");
     expect(state.guidance).toContain("immediately");
     expect(state.nextAction.tool).toBe("submit_guesses");
-    expect(state.nextAction.instruction).toContain("Visually inspect");
+    expect(state.nextAction.instruction).toContain("Visually inspect the rendered page/canvas first");
+    expect(state.nextAction.instruction).toContain("only when a newer canvasVersion materially changes the scene");
+    expect(state.nextAction.instruction).toContain("canvasPerception as the fast picture");
+    expect(state.nextAction.instruction).toContain("canvasGeometry only as a final cross-check");
+    expect(state.nextAction.instruction).not.toContain("reconsider after every canvasVersion change");
     expect(state.urgency).toBe("immediate");
     expect(compactWebMcpState(agentSnapshot, "artist")).not.toHaveProperty("canvasGeometry");
+    expect(compactWebMcpState(agentSnapshot, "artist")).not.toHaveProperty("canvasPerception");
+  });
+
+  it("keeps a worst-case agent guesser state compact", () => {
+    const densePolyline: VectorPrimitive = {
+      type: "polyline",
+      points: Array.from({ length: 48 }, (_, index) => ({
+        x: Math.round(index * CANVAS_WIDTH / 47),
+        y: Math.round((index % 2) * CANVAS_HEIGHT),
+      })),
+      color: "ink",
+      width: 20,
+    };
+    const denseSnapshot = snapshot({
+      canvasVersion: 100,
+      seats: snapshot().seats.map((seat) => seat.id === "guesser" ? { ...seat, controller: "agent" as const } : seat),
+      canvas: Array.from({ length: 100 }, (_, index) => ({
+        id: `dense-${index}`,
+        batchId: `dense-batch-${index}`,
+        canvasVersion: index + 1,
+        roundIndex: 0,
+        seatId: "artist",
+        origin: "human-ui" as const,
+        createdAt: index,
+        primitive: densePolyline,
+      })),
+    });
+
+    const state = compactWebMcpState(denseSnapshot, "guesser");
+    expect(JSON.stringify(state).length).toBeLessThan(8_000);
   });
 });
 

@@ -14,6 +14,7 @@ import type { ReplayPayload } from "./api";
 import {
   buildRoomInvites,
   isAgentInviteUrl,
+  separateAgentViewInstruction,
   type InviteAudience,
 } from "./invite";
 import { currentHumanPromptKey, humanPromptGate } from "./humanPromptGate";
@@ -57,17 +58,16 @@ export function App() {
   );
   const joinForAgent = useCallback(
     async (input: { roomCode: string; name: string; team?: TeamId; controller: ControllerType }) => {
-      const joiningHostedRoom = session.snapshot?.phase === "lobby"
-        && session.credentials?.roomCode === input.roomCode.trim().toUpperCase()
-        && primarySeat?.controller === "human";
-      const join = joiningHostedRoom ? session.joinAgent : session.join;
-      return join(input.roomCode, { name: input.name, team: input.team, controller: input.controller });
+      if (primarySeat?.controller === "human") {
+        throw new Error(separateAgentViewInstruction(input.roomCode, window.location.origin));
+      }
+      return session.join(input.roomCode, { name: input.name, team: input.team, controller: input.controller });
     },
-    [primarySeat?.controller, session.credentials?.roomCode, session.join, session.joinAgent, session.snapshot?.phase],
+    [primarySeat?.controller, session.join],
   );
 
-  const toolSeatId = session.companion?.seatId
-    ?? (primarySeat?.controller === "agent" ? primarySeat.id : null);
+  const humanHostDocument = primarySeat?.controller === "human";
+  const toolSeatId = primarySeat?.controller === "agent" ? primarySeat.id : null;
   const activeHumanPromptKey = currentHumanPromptKey(
     session.snapshot,
     session.credentials?.seatId ?? null,
@@ -97,6 +97,7 @@ export function App() {
     privatePrompt: session.agentPrivatePrompt,
     startPractice: startPracticeForAgent,
     joinMatch: joinForAgent,
+    humanHostDocument,
   });
 
   const copyInvite = useCallback(async (audience: InviteAudience) => {
@@ -160,7 +161,6 @@ export function App() {
           <GameRoom
             snapshot={session.snapshot}
             seatId={session.credentials.seatId}
-            companionSeatId={session.companion?.seatId ?? null}
             busy={actionBusy}
             lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} actionableTools={webmcp.actionableTools} registeredTools={webmcp.registeredTools} context={webmcp.proofContext} authorizationEvents={webmcp.authorizationEvents} invocations={webmcp.invocations} activity={session.snapshot.activity} defaultOpen={session.snapshot.phase !== "drawing" && session.snapshot.phase !== "round-prep"} />}
             onCommand={(command) => act(() => session.command(command))}
@@ -233,10 +233,9 @@ function AppHeader({
   );
 }
 
-function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, onPrompt, onReplay, onPlayAgain, privatePromptGate, onHidePrivatePrompt, playSound }: {
+function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay, onPlayAgain, privatePromptGate, onHidePrivatePrompt, playSound }: {
   snapshot: RoomSnapshot;
   seatId: string;
-  companionSeatId: string | null;
   busy: boolean;
   lens: React.ReactNode;
   onCommand(command: Parameters<ReturnType<typeof useRoomSession>["command"]>[0]): Promise<unknown>;
@@ -248,15 +247,14 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
   playSound(cue: "tap" | "start" | "correct" | "finish"): void;
 }) {
   const self = snapshot.seats.find((seat) => seat.id === seatId);
-  const agentSeat = snapshot.seats.find((seat) => seat.id === companionSeatId);
   const artist = snapshot.seats.find((seat) => seat.id === snapshot.artistSeatId);
   const isPrep = snapshot.phase === "round-prep";
   const humanArtist = isArtist(snapshot, seatId) && self?.controller === "human";
   const humanGuesser = canGuess(snapshot, seatId) && self?.controller === "human";
   const primaryAgentArtist = isArtist(snapshot, seatId) && self?.controller === "agent";
   const primaryAgentGuesser = canGuess(snapshot, seatId) && self?.controller === "agent";
-  const agentArtist = primaryAgentArtist || Boolean(agentSeat && isArtist(snapshot, agentSeat.id));
-  const agentGuesser = primaryAgentGuesser || Boolean(agentSeat && canGuess(snapshot, agentSeat.id));
+  const agentArtist = primaryAgentArtist;
+  const agentGuesser = primaryAgentGuesser;
   const prepHumanGuesser = isPrep
     && self?.controller === "human"
     && self.team === snapshot.activeTeam
@@ -265,13 +263,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
     && self?.controller === "agent"
     && self.team === snapshot.activeTeam
     && self.id !== snapshot.artistSeatId;
-  const prepCompanionAgentGuesser = Boolean(
-    isPrep
-      && agentSeat
-      && agentSeat.team === snapshot.activeTeam
-      && agentSeat.id !== snapshot.artistSeatId,
-  );
-  const prepGuesser = prepHumanGuesser || prepPrimaryAgentGuesser || prepCompanionAgentGuesser;
+  const prepGuesser = prepHumanGuesser || prepPrimaryAgentGuesser;
   const [prompt, setPrompt] = useState<PrivatePrompt | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
   const [promptAttempt, setPromptAttempt] = useState(0);
@@ -436,7 +428,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
                 <strong>{roleMessage}</strong>
                 {humanArtist && prompt && privatePromptGate !== "hidden" ? <span>{prompt.category} · do not write words or letters</span> : null}
               </div>
-              {agentArtist || agentGuesser || prepPrimaryAgentGuesser || prepCompanionAgentGuesser ? <span className="agent-ready-pill"><span className="pulse-dot" /> WebMCP tools ready</span> : null}
+              {agentArtist || agentGuesser || prepPrimaryAgentGuesser ? <span className="agent-ready-pill"><span className="pulse-dot" /> WebMCP tools ready</span> : null}
             </div>
 
             <CanvasBoard events={snapshot.canvas} canvasVersion={snapshot.canvasVersion} canDraw={humanArtist} busy={busy} artistLabel={artist?.name} onDraw={draw} onUndo={undo} />
