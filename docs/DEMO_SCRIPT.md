@@ -29,11 +29,11 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 **Narration:** “Most AI games bring their bot to you. MCPencil lets people bring the browser agent they already use. Humans and agents join the same realtime room, take the same roles, and use one authoritative game engine.”
 
-### 0:25–0:40 — agent joins and role tools appear
+### 0:25–0:40 — agent joins and artist actions unlock
 
-**Picture:** The human clicks **Practice Pair**, chooses **Invite an AI player**, and pastes the generated invitation into a fresh no-context agent chat. The agent uses its WebMCP-capable browser surface to navigate, the dedicated handoff page appears, and it calls the page-exposed `play_mcpencil({})` tool. The waiting lobby starts only after the agent connects; expand the Lens as artist tools appear.
+**Picture:** The human clicks **Practice Pair**, chooses **Invite an AI player**, and pastes the generated invitation into a fresh no-context agent chat. The agent uses its WebMCP-capable browser surface to navigate, the dedicated handoff page appears, and it calls the page-exposed `play_mcpencil({})` tool. The waiting lobby starts only after the agent connects; expand the Lens as artist actions become available.
 
-**Narration:** “The agent joins through WebMCP. Tool registration is dynamic: as its role changes, obsolete tools disappear and only legal actions remain.”
+**Narration:** “The agent joins through WebMCP. One stable tool registry lasts for the page, while role and phase atomically control which actions are legal now—so long matches stay compatible without weakening authorization.”
 
 **Lens close-up:** `get_match_state`, `draw_stroke`, `undo_last_stroke`; prompt event visibly reads `MASKED`.
 
@@ -47,9 +47,9 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 1:05–1:20 — reverse roles
 
-**Picture:** Round transition remains readable for its minimum display time. The private human card appears while the Lens withholds `submit_guesses`. Hide the card and place the opening stroke; the configured round clock begins and `submit_guesses` appears.
+**Picture:** Round transition remains readable for its minimum display time. The private human card appears while the Lens does not list `submit_guesses` as actionable. Hide the card and place the opening stroke; the configured round clock begins and the Lens adds `submit_guesses` to the actionable set.
 
-**Narration:** “Now the exact same room reverses direction. The artist tools disappear. The agent becomes a guesser—and never receives the answer.”
+**Narration:** “Now the exact same room reverses direction. Artist actions are revoked, guessing unlocks, and the agent never receives the answer.”
 
 ### 1:20–1:45 — human draws, agent guesses visually
 
@@ -86,7 +86,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 ## Edit priorities
 
 1. Preserve actual tool calls, actual latency, and actual accepted results; never substitute a mock call overlay.
-2. Keep at least one role-driven unregister/register transition readable in realtime.
+2. Keep at least one role-driven actionable-set transition readable in the Lens.
 3. Show the private prompt only when the agent/human artist is authorized; never reveal the answer early to a guesser.
 4. Put subtitles on every narration line and verify spelling of WebMCP, Durable Objects, and MCPencil.
 5. Keep third-party product UI brief and functional. The project UI, behavior, and evidence should dominate the frame.
@@ -95,7 +95,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 ## Pickup list
 
 - Clean MCPencil logo reveal with pencil sound.
-- Lens close-up showing a tool-set swap.
+- Lens close-up showing the actionable set change while the descriptor registry stays stable.
 - Accepted singular `draw_stroke` result with no private prompt in the event stream.
 - Human pointer stroke synced in a second browser.
 - Replay scrub and analytics close-up.

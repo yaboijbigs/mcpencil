@@ -30,7 +30,7 @@ flowchart LR
     D -->|untrusted display data| B
 ```
 
-Client-side tool availability is guidance, not authorization. All role, phase, team, time, token, rate, and version checks are repeated inside the authoritative room.
+The stable client descriptor registry is discoverability, not authorization. The client maintains a separate exact actionable set, and all role, phase, team, time, token, rate, and version checks are repeated inside the authoritative room.
 
 ## Threats and controls
 
@@ -44,7 +44,7 @@ Controls:
 - the private prompt path verifies the token hash, active seat, artist role, phase, and round;
 - raw prompts are never included in activity/Lens entries or application logs;
 - generic error codes do not interpolate answers;
-- Practice round two withholds `submit_guesses` until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
+- Practice round two keeps `submit_guesses` non-actionable until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
 - tests recursively scan every pre-reveal shared payload for the answer and known aliases.
 
 ### Seat impersonation or token theft
@@ -127,18 +127,18 @@ Controls:
 - static assets are served at the edge;
 - errors are isolated per request and do not use pass-through exception handling.
 
-### Tool lifecycle confused deputy
+### Stable tool descriptor confused deputy
 
-Threats include an old artist tool remaining callable after rotation or an in-flight call committing in the next phase.
+Threats include invoking the stable artist descriptor after rotation or an in-flight call committing in the next phase.
 
 Controls:
 
-- every role/phase change removes the obsolete registration scope;
-- removing a registration is not assumed to terminate an executing invocation;
-- invocation execution signals and captured-generation checks protect pending network/ack waits and local results;
-- server authorization is based on current persisted state, never on the client tool set;
+- the complete semantic descriptor registry is attached once for the document lifetime, avoiding repeated configuration changes without presenting descriptors as permissions;
+- every role/phase update atomically recomputes the exact actionable set, and each handler rejects calls outside that set before work begins;
+- invocation execution signals protect pending network and acknowledgement waits;
+- server authorization is based on current persisted state, never on the descriptor registry or Lens set;
 - round and expected-version checks prevent cross-phase commits;
-- tests assert the exact registered tool set for each role/phase.
+- tests assert one stable registration pass, the exact actionable set for each role/phase, and rejection of stale direct invocations.
 
 ## Privacy and logging
 

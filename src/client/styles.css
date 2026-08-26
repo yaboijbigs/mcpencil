@@ -249,7 +249,7 @@ svg { display: block; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
-  .origin-webmcp.ink-mark.is-revealing { animation: none; }
+  .origin-webmcp.ink-mark.is-revealing { stroke-dasharray: none; animation: none; }
   .live-agent-pencil { display: none; }
 }
 

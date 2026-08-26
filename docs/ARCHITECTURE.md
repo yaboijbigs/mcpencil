@@ -8,14 +8,16 @@ MCPencil treats a human pointer and a browser agent's WebMCP call as two control
 flowchart TB
     subgraph Browser[Single-page browser client]
       UI[Human controls]
-      MCP[Role-scoped WebMCP tools]
+      MCP[Stable WebMCP descriptor registry]
+      GATE[Role and phase action gate]
       BUS[Typed client command bus]
       SVG[1000 × 700 SVG renderer]
       LENS[WebMCP Lens]
       UI --> BUS
-      MCP --> BUS
+      MCP --> GATE
+      GATE --> BUS
       BUS --> SVG
-      MCP --> LENS
+      GATE --> LENS
       UI --> LENS
     end
 
@@ -112,22 +114,23 @@ The room accepts WebSockets through the Durable Object hibernation API. Connecti
 
 Broadcasts carry monotonically increasing room revisions and canvas versions. Clients ignore older data. After a disconnect, a client authenticates again, reports the last applied version, and receives either missing events or a canonical snapshot. Timers continue while no clients are connected.
 
-## Dynamic WebMCP lifecycle
+## Stable WebMCP registry and dynamic action gate
 
-The app uses the imperative `document.modelContext.registerTool` API. Tool registration is derived from the current role-safe snapshot and caller seat.
+The app uses the imperative `document.modelContext.registerTool` API. It registers the complete semantic descriptor set once for the document lifetime. It does not unregister and recreate descriptors on every role transition, which keeps long matches compatible with browser and agent surfaces that impose a finite tool-configuration-change budget.
 
 ```mermaid
 flowchart LR
-    SNAP[Snapshot or seat change] --> ABORT[Retire previous tool registrations]
-    ABORT --> CALC[Calculate legal tools + generation]
-    CALC --> REG[Register tool set]
+    MOUNT[Document mount] --> REG[Register complete descriptor set once]
+    SNAP[Snapshot or seat change] --> CALC[Calculate exact actionable set]
     REG --> CALL[Tool invocation]
-    CALL --> BUS[Shared command bus]
+    CALC --> GATE[Atomic client role and phase gate]
+    CALL --> GATE
+    GATE --> BUS[Shared command bus]
     BUS --> ACK[Wait for accepted local version]
     ACK --> RESULT[Compact tool result + Lens entry]
 ```
 
-Changing role, phase, room, or seat aborts the prior registration scope. Chrome does not terminate an invocation merely because its tool registration was removed, so handlers also forward the invocation's own execution signal, compare a captured generation before accepting local results, and rely on current server-side role, phase, round-expiry, and canvas-version authorization. `get_match_state` is always role-safe and includes the private prompt only for the authenticated active agent artist. Artist calls to `draw_stroke` are serialized locally and version-chained; the Worker independently enforces the one-primitive invariant.
+Tool descriptors provide discoverability, not authorization. From each role-safe snapshot and caller seat, the client atomically computes the exact tools actionable now; every handler rejects a call outside that set before work begins, and the Lens displays that set rather than pretending the stable registry was replaced. Invocation execution signals cancel pending waits and requests. The room authority independently validates the current token, seat, role, phase, deadline, rate, round, and canvas version, so a stale or manually invoked descriptor cannot cross a transition boundary. `get_match_state` remains role-safe and includes the private prompt only for the authenticated active agent artist. Artist calls to `draw_stroke` are serialized locally and version-chained; the Worker independently enforces the one-primitive invariant.
 
 Practice Pair is one authoritative two-seat session on one page. The human creates a waiting one-seat room, then the zero-context `play_mcpencil` entry tool returns a distinct opaque agent credential. The room starts only after both authenticated WebSockets connect. Human controls always send the human token with `human-ui` origin; WebMCP tools always send the companion token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them.
 
@@ -135,7 +138,7 @@ Tool outputs are concise and structured. Player-created names and guesses are la
 
 ## Prompt secrecy
 
-The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a prepared or drawing phase it may leave the room only through a role-safe active-artist response after token, seat, round, phase, and artist checks. In Practice round two, the human artist reveal occupies a private UI subtree while the agent's `submit_guesses` registration is withheld. The human must explicitly memorize and hide the card; React unmounts the answer, and the first visible stroke starts the clock and enables guessing.
+The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a prepared or drawing phase it may leave the room only through a role-safe active-artist response after token, seat, round, phase, and artist checks. In Practice round two, the human artist reveal occupies a private UI subtree while the agent's `submit_guesses` action remains unauthorized. The human must explicitly memorize and hide the card; React unmounts the answer, and the first visible stroke starts the clock and enables guessing.
 
 The following surfaces are explicitly prompt-free until round end:
 

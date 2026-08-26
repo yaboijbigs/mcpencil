@@ -1,5 +1,18 @@
 import { canGuess, isArtist, type RoomSnapshot, type VectorPrimitive } from "../shared/game";
 
+export const WEBMCP_REGISTERED_TOOL_NAMES = [
+  "get_match_state",
+  "start_practice",
+  "play_mcpencil",
+  "configure_match",
+  "start_match",
+  "draw_stroke",
+  "undo_last_stroke",
+  "submit_guesses",
+  "get_round_result",
+  "ready_next",
+] as const;
+
 export function webMcpToolNames(
   snapshot: RoomSnapshot | null,
   seatId: string | null,

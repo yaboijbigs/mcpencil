@@ -13,7 +13,12 @@ import {
   type VectorPrimitive,
 } from "../src/shared/game";
 import { arcPath, pointsAttribute, remainingSeconds } from "../src/shared/format";
-import { compactWebMcpRoundResult, compactWebMcpState, webMcpToolNames } from "../src/client/webMcpAvailability";
+import {
+  WEBMCP_REGISTERED_TOOL_NAMES,
+  compactWebMcpRoundResult,
+  compactWebMcpState,
+  webMcpToolNames,
+} from "../src/client/webMcpAvailability";
 
 const line: VectorPrimitive = {
   type: "line",
@@ -237,6 +242,81 @@ describe("role-safe shared helpers", () => {
 });
 
 describe("dynamic WebMCP availability", () => {
+  it.each([6, 8])("keeps document descriptors stable throughout a %i-round Practice Pair", (totalRounds) => {
+    const human = {
+      id: "practice-human",
+      name: "Human",
+      team: "cobalt" as const,
+      controller: "human" as const,
+      isHost: true,
+      isReady: true,
+      isConnected: true,
+    };
+    const agent = {
+      id: "practice-agent",
+      name: "Ink",
+      team: "cobalt" as const,
+      controller: "agent" as const,
+      isHost: false,
+      isReady: true,
+      isConnected: true,
+    };
+    const activeFingerprints = [JSON.stringify(webMcpToolNames(null, null, true, "ABCDE"))];
+    const registeredFingerprints = [JSON.stringify(WEBMCP_REGISTERED_TOOL_NAMES)];
+    let previousResult: RoomSnapshot["roundResult"] = null;
+
+    for (let roundIndex = 0; roundIndex < totalRounds; roundIndex += 1) {
+      const artistSeatId = roundIndex % 2 === 0 ? agent.id : human.id;
+      const drawing = snapshot({
+        mode: "practice",
+        phase: "drawing",
+        roundIndex,
+        totalRounds,
+        artistSeatId,
+        seats: [human, agent],
+        roundResult: previousResult,
+      });
+      activeFingerprints.push(JSON.stringify(webMcpToolNames(drawing, agent.id)));
+      registeredFingerprints.push(JSON.stringify(WEBMCP_REGISTERED_TOOL_NAMES));
+
+      previousResult = {
+        roundIndex,
+        prompt: roundIndex % 2 === 0 ? "camera" : "drums",
+        artistSeatId,
+        team: "cobalt",
+        pointsAwarded: 100,
+        elapsedMs: 30_000,
+        strokeCount: 5,
+        toolCallCount: 5,
+      };
+      const roundEnd = {
+        ...drawing,
+        phase: "round-end" as const,
+        roundResult: previousResult,
+        seats: [human, { ...agent, isReady: false }],
+      };
+      activeFingerprints.push(JSON.stringify(webMcpToolNames(roundEnd, agent.id)));
+      registeredFingerprints.push(JSON.stringify(WEBMCP_REGISTERED_TOOL_NAMES));
+
+      const ready = {
+        ...roundEnd,
+        seats: [human, agent],
+      };
+      activeFingerprints.push(JSON.stringify(webMcpToolNames(ready, agent.id)));
+      registeredFingerprints.push(JSON.stringify(WEBMCP_REGISTERED_TOOL_NAMES));
+    }
+
+    const activeChanges = activeFingerprints.slice(1).filter(
+      (fingerprint, index) => fingerprint !== activeFingerprints[index],
+    ).length;
+    const registeredChanges = registeredFingerprints.slice(1).filter(
+      (fingerprint, index) => fingerprint !== registeredFingerprints[index],
+    ).length;
+
+    expect(activeChanges).toBe(totalRounds * 3);
+    expect(registeredChanges).toBe(0);
+  });
+
   it("registers only landing tools before a seat exists", () => {
     expect(webMcpToolNames(null, null)).toEqual([
       "get_match_state",

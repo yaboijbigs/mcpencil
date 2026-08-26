@@ -18,14 +18,14 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 2. Click **Invite an AI player** and paste the copied zero-context invitation into a fresh browser-agent conversation.
 3. The invitation tells the agent to open the agent-specific room URL and call `play_mcpencil`. That zero-argument tool joins and readies the agent; only then does Practice Pair begin.
 4. In round one, watch the WebMCP Lens: the private prompt stays masked and each `draw_stroke` call produces exactly one immediately visible mark. Guess the picture in the game UI.
-5. In round two, memorize the private prompt and hide the card. Your first stroke starts the configured round clock and registers `submit_guesses`; draw while the agent visually inspects each canvas update.
+5. In round two, memorize the private prompt and hide the card. Your first stroke starts the configured round clock and makes `submit_guesses` actionable; draw while the agent visually inspects each canvas update.
 6. Open the result and replay panels. Compare every guess, human/WebMCP provenance, time-to-guess, strokes, and tool calls.
 
 The entire path demonstrates both WebMCP directions without an app-owned bot, model API key, bot OAuth flow, or DOM automation.
 
 ## Why WebMCP is essential
 
-MCPencil exposes a game protocol, not a pile of clickable UI. Tool availability changes with the authenticated seat, match phase, team, and role. An agent draws through the same typed command bus as a human and can only communicate with bounded low-level geometry—there is no semantic “draw a cat” tool and no image-generation escape hatch. When roles reverse, the canvas remains visual; the agent must understand what the human drew and use the page's guess tool.
+MCPencil exposes a game protocol, not a pile of clickable UI. A stable page-lifetime registry describes the complete game vocabulary, while the actionable set changes with the authenticated seat, match phase, team, and role. An agent draws through the same typed command bus as a human and can only communicate with bounded low-level geometry—there is no semantic “draw a cat” tool and no image-generation escape hatch. When roles reverse, the canvas remains visual; the agent must understand what the human drew and use the page's guess tool.
 
 Every accepted mutation follows one path:
 
@@ -38,19 +38,19 @@ human UI or WebMCP tool
   → local render acknowledgement
 ```
 
-The collapsible **WebMCP Lens** makes this visible to judges: registered tools, role-driven tool changes, invocation timing, safe input summaries, compact results, canvas versions, and action provenance. Private prompts are represented only by masked events.
+The collapsible **WebMCP Lens** makes this visible to judges: the exact tools actionable for the current role and phase, invocation timing, safe input summaries, compact results, canvas versions, and action provenance. Private prompts are represented only by masked events.
 
 ### Zero-context invitations
 
 Every lobby has two deliberately different share actions. **Invite a person** copies the plain room URL. **Invite an AI player** copies a complete interface handoff plus a structurally delimited, self-describing `/webmcp/rooms/{code}?invite=agent#webmcp` link. It tells the agent to navigate with its WebMCP-capable browser surface, then use browser viewing only for the canvas and perform every game action through MCPencil's page-exposed tools. It calls out `play_mcpencil({})`, every returned `nextAction`, and `match-end`; if WebMCP is absent, the agent reports that limitation instead of substituting clicks or DOM automation.
 
-The page does not depend on an MCPencil skill, system prompt, model API, or prior conversation. The agent deep link reinforces the user's intent with a room-specific WebMCP document title, a dedicated no-form handoff page, a visible accessible alert, and a minimal initial tool set. It also recognizes the legacy `invite=agentOpen` value produced when a chat client glued prose to an undelimited URL. `play_mcpencil` needs no arguments when the URL contains the room code, supplies a default display name, joins as an automatically ready agent seat, and returns the exact next tool and arguments. Every subsequent state repeats `mustContinue` and the match-end completion condition.
+The page does not depend on an MCPencil skill, system prompt, model API, or prior conversation. The agent deep link reinforces the user's intent with a room-specific WebMCP document title, a dedicated no-form handoff page, a visible accessible alert, and a minimal initial actionable set. It also recognizes the legacy `invite=agentOpen` value produced when a chat client glued prose to an undelimited URL. `play_mcpencil` needs no arguments when the URL contains the room code, supplies a default display name, joins as an automatically ready agent seat, and returns the exact next tool and arguments. Every subsequent state repeats `mustContinue` and the match-end completion condition.
 
 ## WebMCP tool contract
 
-Tools are registered imperatively with `document.modelContext.registerTool`. Per-tool `AbortController`s retire obsolete registrations as roles change, and the client confirms browser-side removal before registering a successor with the same name. In-flight acknowledgements remain safe through execution signals and server-side role/phase checks. Read tools use `readOnlyHint`; results containing player-authored names, guesses, or canvas geometry use `untrustedContentHint`.
+Tools are registered imperatively with `document.modelContext.registerTool`. The complete semantic descriptor set is registered once for the document lifetime instead of being removed and recreated every round; this stays compatible with browser and agent surfaces that impose a finite tool-configuration-change budget. Separately, the client computes an exact actionable set from the latest authenticated role and phase. Every handler checks that set at invocation time, and the room authority independently repeats all seat, role, phase, time, and version checks before mutation. Invocation execution signals still cancel pending work. Read tools use `readOnlyHint`; results containing player-authored names, guesses, or canvas geometry use `untrustedContentHint`.
 
-| Tool | Available when | Mutates | What it does |
+| Tool | Actionable when | Mutates | What it does |
 |---|---|---:|---|
 | `get_match_state` | Always | No | Returns a role-safe summary. An authenticated active agent artist also receives its private prompt so it can draw immediately; an eligible agent guesser receives compact canvas geometry and recent guesses. No other role receives either private prompt or guesser-only geometry. |
 | `start_practice` | Landing/practice | Yes | Creates the balanced agent-draws/human-draws judge path and joins the caller. |
@@ -69,7 +69,7 @@ Between turns, agents can long-poll `get_match_state` with the last `revision` a
 
 ## Game modes
 
-- **Practice Pair:** a noncompetitive proof path—agent draws, then human draws—with 2, 4, or 6 rounds. Creating practice opens a one-seat lobby and does not start a game. `play_mcpencil` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. The human-artist round remains private and untimed until the human's first stroke; the agent has no guess tool before it lands.
+- **Practice Pair:** a noncompetitive proof path—agent draws, then human draws—with 2, 4, or 6 rounds. Creating practice opens a one-seat lobby and does not start a game. `play_mcpencil` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. The human-artist round remains private and untimed until the human's first stroke; the guess action is not authorized before it lands.
 - **Team Arena:** two mixed teams of 2–4 seats play 4, 6, or 8 rounds, alternating teams and rotating artists.
 - **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
 
@@ -151,7 +151,7 @@ After deployment, verify DNS/custom-domain activation in the same Cloudflare acc
 
 ## Security and integrity
 
-- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guesses` remains unregistered until the human hides and unmounts the prompt card and sends the opening stroke.
+- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guesses` remains non-actionable until the human hides and unmounts the prompt card and sends the opening stroke.
 - Anonymous seat credentials use opaque random tokens; only token hashes are persisted.
 - Names and guesses are length-limited data, never HTML or instructions.
 - Every mutation is authorized against room phase, seat, role, team, expiry, expected canvas version, and rate limits.
@@ -170,7 +170,7 @@ Automated coverage targets:
 - lobby constraints, artist rotation, scoring, idempotency, normalization, typo tolerance, and rate limiting;
 - proof that private prompts never enter a shared response, event, replay record, or log object;
 - parity between human UI and WebMCP commands;
-- exact role/controller/gate-driven tool availability, plus cleanup, in-flight generation safety, and result annotations.
+- stable page-lifetime descriptor registration, exact role/controller/gate-driven actionability, in-flight cancellation, and result annotations.
 
 The release evaluation uses 12 original golden cards. The target is at least 8/12 agent drawings guessed by humans, at least 8/12 human drawings guessed by the browser agent, and zero WebMCP tool-contract failures. Record results in [Playtesting](docs/PLAYTEST.md).
 

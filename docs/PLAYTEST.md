@@ -23,7 +23,7 @@ The gate must cover:
 - private prompt absence from every shared pre-reveal payload;
 - human UI/WebMCP command parity;
 - WebSocket disconnect, reconnect, and version catch-up;
-- the exact dynamic WebMCP tool set by role and phase.
+- one page-lifetime WebMCP descriptor registration plus the exact actionable set and handler rejection by role and phase.
 
 Record the release commit and result:
 
@@ -50,15 +50,17 @@ Use a clean browser profile and the production domain.
 - [ ] Non-host players can see the synchronized settings but cannot change them through either the UI or WebMCP.
 - [ ] Changing settings resets connected human ready states while agent seats remain auto-ready.
 - [ ] Round one assigns the companion agent as artist and the human as guesser.
-- [ ] Only agent-artist tools are registered; the prompt event is masked in the Lens.
+- [ ] The complete descriptor registry attaches once; the Lens lists only the agent-artist actions currently authorized, and the prompt event is masked.
 - [ ] Three or more `draw_stroke` calls each persist, broadcast, render, and acknowledge separately; no multi-stroke burst appears.
 - [ ] Human correct guess ends the round and reveals the answer once.
 - [ ] Round two assigns the human as artist and companion agent as guesser.
-- [ ] Old artist tools disappear; `submit_guesses` appears for the agent seat only after the human prompt is hidden and the opening stroke lands.
+- [ ] On role reversal, the Lens removes artist actions from its actionable set; `submit_guesses` becomes actionable only after the human prompt is hidden and the opening stroke lands.
+- [ ] Calling a stable descriptor outside its current actionable set fails before local work, and a direct stale mutation is independently rejected by the room authority.
 - [ ] Human prompt is private and is removed on round end.
 - [ ] Agent inspects the visible canvas and calls `submit_guesses`; every submitted candidate is visible live.
 - [ ] Round result and final replay contain the complete exact guess transcript with player, provenance, correctness, and timing.
 - [ ] Whole flow completes in 60–90 seconds without manual recovery.
+- [ ] A 6- or 8-round match completes without descriptor re-registration, a tool-configuration-limit warning, or loss of WebMCP access.
 
 Run at least five rehearsals. Target four clean first-attempt completions; the final three runs before recording must be clean.
 
@@ -101,7 +103,7 @@ Also inspect the production JavaScript bundle: the production prompt deck should
 |---|---|---|
 | ChatGPT desktop + GPT-5.6 Sol | Both WebMCP directions; role-transition generation safety; Lens readability | [ ] |
 | ChatGPT desktop + GPT-5.6 Terra | Both WebMCP directions; recovery from one stale call | [ ] |
-| Chrome 149+ with WebMCP enabled | Registration, annotations, compact tool results | [ ] |
+| Chrome 149+ with WebMCP enabled | Stable descriptor registration, role/phase action gate, annotations, compact results | [ ] |
 | Chrome without WebMCP | Human game works; clear compatibility message; no crash | [ ] |
 | Desktop 1440×900 | No clipped game or Lens; video framing is legible | [ ] |
 | Laptop 1280×720 | Core controls and timer remain above fold | [ ] |

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from "react";
 import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
@@ -22,6 +22,8 @@ import {
 } from "./Icons";
 
 export type DrawTool = "pen" | "line" | "ellipse" | "rectangle" | "eraser";
+
+const ARRIVAL_ANIMATION_FALLBACK_MS = 700;
 
 interface CanvasBoardProps {
   events: CanvasEvent[];
@@ -78,7 +80,8 @@ export function CanvasBoard({
   const knownEventIdsRef = useRef(new Set(events.map((event) => event.id)));
   const seenEventIdsRef = useRef(new Set(events.map((event) => event.id)));
   const canonicalEventIdsRef = useRef(new Set(events.map((event) => event.id)));
-  const progressiveEventIdsRef = useRef(new Set<string>());
+  const [revealingEventIds, setRevealingEventIds] = useState<Set<string>>(() => new Set());
+  const revealFallbackTimersRef = useRef(new Map<string, number>());
   const activeRoundIndexRef = useRef<number | null>(events.at(-1)?.roundIndex ?? null);
   const visibleEvents = useMemo(
     () => prefersReducedMotion
@@ -116,20 +119,25 @@ export function CanvasBoard({
     knownEventIdsRef.current = canonicalIds;
     for (const event of events) seenEventIdsRef.current.add(event.id);
     if (currentRoundIndex !== null) activeRoundIndexRef.current = currentRoundIndex;
-    progressiveEventIdsRef.current = new Set(
-      Array.from(progressiveEventIdsRef.current).filter((id) => canonicalIds.has(id)),
-    );
     const progressiveIncomingIds: string[] = [];
-    if (prefersReducedMotion) {
-      progressiveEventIdsRef.current.clear();
-    } else {
+    if (!prefersReducedMotion) {
       for (const event of incomingEvents) {
         if (event.origin === "webmcp" && !restoredEventIds.has(event.id)) {
-          progressiveEventIdsRef.current.add(event.id);
           progressiveIncomingIds.push(event.id);
         }
       }
     }
+
+    setRevealingEventIds((current) => {
+      const next = new Set(
+        prefersReducedMotion
+          ? []
+          : Array.from(current).filter((id) => canonicalIds.has(id)),
+      );
+      for (const eventId of progressiveIncomingIds) next.add(eventId);
+      if (next.size === current.size && Array.from(next).every((id) => current.has(id))) return current;
+      return next;
+    });
 
     // The normal WebMCP path is exactly one stroke per snapshot. Reveal that
     // stroke immediately even if a reconnect queue is still draining. Multiple
@@ -176,6 +184,40 @@ export function CanvasBoard({
       return next;
     });
   }, [events, prefersReducedMotion]);
+
+  const finishArrival = useCallback((eventId: string) => {
+    const fallbackTimer = revealFallbackTimersRef.current.get(eventId);
+    if (fallbackTimer !== undefined) {
+      window.clearTimeout(fallbackTimer);
+      revealFallbackTimersRef.current.delete(eventId);
+    }
+    setRevealingEventIds((current) => {
+      if (!current.has(eventId)) return current;
+      const next = new Set(current);
+      next.delete(eventId);
+      return next;
+    });
+  }, []);
+
+  useEffect(() => {
+    for (const [eventId, timer] of revealFallbackTimersRef.current) {
+      if (!revealingEventIds.has(eventId) || !revealedEventIds.has(eventId)) {
+        window.clearTimeout(timer);
+        revealFallbackTimersRef.current.delete(eventId);
+      }
+    }
+    for (const eventId of revealingEventIds) {
+      if (!revealedEventIds.has(eventId)) continue;
+      if (revealFallbackTimersRef.current.has(eventId)) continue;
+      const timer = window.setTimeout(() => finishArrival(eventId), ARRIVAL_ANIMATION_FALLBACK_MS);
+      revealFallbackTimersRef.current.set(eventId, timer);
+    }
+  }, [finishArrival, revealedEventIds, revealingEventIds]);
+
+  useEffect(() => () => {
+    for (const timer of revealFallbackTimersRef.current.values()) window.clearTimeout(timer);
+    revealFallbackTimersRef.current.clear();
+  }, []);
 
   useEffect(() => {
     if (nextRevealId === null || prefersReducedMotion) return;
@@ -366,20 +408,17 @@ export function CanvasBoard({
             <pattern id="dot-grid" width="28" height="28" patternUnits="userSpaceOnUse">
               <circle cx="2" cy="2" r="1.4" fill="#1d2230" opacity=".055" />
             </pattern>
-            <filter id="ink-soften" x="-10%" y="-10%" width="120%" height="120%">
-              <feTurbulence type="fractalNoise" baseFrequency=".7" numOctaves="2" result="noise" />
-              <feDisplacementMap in="SourceGraphic" in2="noise" scale=".45" />
-            </filter>
           </defs>
           <rect width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="#fffdf7" rx="18" />
           <rect width={CANVAS_WIDTH} height={CANVAS_HEIGHT} fill="url(#dot-grid)" rx="18" />
-          <g className="canonical-ink" filter="url(#ink-soften)">
+          <g className="canonical-ink">
             {visibleEvents.map((event) => (
               <PrimitiveMark
                 key={event.id}
                 primitive={event.primitive}
                 origin={event.origin}
-                animateArrival={progressiveEventIdsRef.current.has(event.id)}
+                animateArrival={revealingEventIds.has(event.id)}
+                onArrivalComplete={() => finishArrival(event.id)}
               />
             ))}
             {draft ? <PrimitiveMark primitive={draft} origin="human-ui" draft /> : null}
@@ -413,11 +452,13 @@ export function PrimitiveMark({
   origin,
   draft = false,
   animateArrival = false,
+  onArrivalComplete,
 }: {
   primitive: VectorPrimitive;
   origin: CanvasEvent["origin"];
   draft?: boolean;
   animateArrival?: boolean;
+  onArrivalComplete?: () => void;
 }) {
   const shared = {
     stroke: COLOR_VALUES[primitive.color],
@@ -428,6 +469,11 @@ export function PrimitiveMark({
     vectorEffect: "non-scaling-stroke" as const,
     pathLength: 1,
     className: `${draft ? "draft-mark" : "ink-mark"} origin-${origin}${animateArrival ? " is-revealing" : ""}`,
+    onAnimationEnd: animateArrival
+      ? (event: React.AnimationEvent<SVGElement>) => {
+          if (event.animationName === "ink-arrive") onArrivalComplete?.();
+        }
+      : undefined,
   };
 
   switch (primitive.type) {

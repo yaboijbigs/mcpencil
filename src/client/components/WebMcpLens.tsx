@@ -18,22 +18,22 @@ export function WebMcpLens({ supported, tools, invocations, activity, defaultOpe
     <aside className={`lens ${open ? "is-open" : "is-closed"}`} aria-label="WebMCP Lens">
       <button className="lens-heading" type="button" onClick={() => setOpen((value) => !value)} aria-expanded={open}>
         <span className="lens-orb"><EyeIcon /></span>
-        <span><strong>WebMCP Lens</strong><small>{supported ? `${tools.length} live tools` : "compatibility view"}</small></span>
+        <span><strong>WebMCP Lens</strong><small>{supported ? `${tools.length} actionable tools` : "compatibility view"}</small></span>
         <ChevronIcon className="lens-chevron" />
       </button>
       {open ? <div className="lens-body">
         {!supported ? <div className="lens-notice" role="alert"><InfoIcon /><p>This browser surface does not expose MCPencil's page WebMCP tools. Human controls remain available for people, but an AI player must open the room in a WebMCP-capable agent browser.</p></div>
-          : <div className="lens-status"><span className="pulse-dot" />Tools are attached to this page</div>}
+          : <div className="lens-status"><span className="pulse-dot" />Stable tool registry attached</div>}
         <div className="lens-tabs" role="tablist" aria-label="Lens view">
-          <button type="button" role="tab" aria-selected={tab === "tools"} onClick={() => setTab("tools")}>Role tools</button>
+          <button type="button" role="tab" aria-selected={tab === "tools"} onClick={() => setTab("tools")}>Available now</button>
           <button type="button" role="tab" aria-selected={tab === "trace"} onClick={() => setTab("trace")}>Live trace</button>
         </div>
         {tab === "tools" ? <div className="tool-list">
           {tools.length ? tools.map((tool) => <div className="tool-row" key={tool}>
             <span className={isReadTool(tool) ? "tool-kind read" : "tool-kind write"}>{isReadTool(tool) ? "READ" : "WRITE"}</span>
             <code>{tool}</code><span className="registered-mark"><CheckIcon /></span>
-          </div>) : <p className="lens-empty">Tools will appear as your role changes.</p>}
-          <div className="role-swap-note"><BotIcon /> Role changes atomically swap this set.</div>
+          </div>) : <p className="lens-empty">No tools are actionable for this role yet.</p>}
+          <div className="role-swap-note"><BotIcon /> Role and phase atomically update this actionable set.</div>
         </div> : <div className="trace-list" aria-live="polite">
           {invocations.map((call) => <article className="trace-row" key={call.id}>
             <span className={`trace-state ${call.status}`}>{call.status === "ok" ? <CheckIcon /> : call.status === "error" ? <XIcon /> : <span className="mini-spinner" />}</span>

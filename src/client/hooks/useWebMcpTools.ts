@@ -16,7 +16,12 @@ import {
   type TeamId,
 } from "../../shared/game";
 import { roomCodeFromUrl } from "../invite";
-import { compactWebMcpRoundResult, compactWebMcpState, webMcpToolNames } from "../webMcpAvailability";
+import {
+  WEBMCP_REGISTERED_TOOL_NAMES,
+  compactWebMcpRoundResult,
+  compactWebMcpState,
+  webMcpToolNames,
+} from "../webMcpAvailability";
 
 export interface LensInvocation {
   id: string;
@@ -97,13 +102,8 @@ const ConfigureMatchInput = z.object({
   roundDurationMs: z.number().int(),
 }).strict();
 
-const TOOL_ACK_GRACE_MS = 400;
-
 interface ToolRegistration {
   controller: AbortController;
-  inFlight: number;
-  lastSettledAt: number;
-  removalTimer: number | null;
   status: "registering" | "registered" | "retiring";
 }
 
@@ -120,7 +120,6 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   const supported = Boolean(document.modelContext);
   const [invocations, setInvocations] = useState<LensInvocation[]>([]);
   const [registeredToolNames, setRegisteredToolNames] = useState<Set<string>>(() => new Set());
-  const [registryEpoch, setRegistryEpoch] = useState(0);
   const [consumedReadyNextKey, setConsumedReadyNextKey] = useState<string | null>(null);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
@@ -138,8 +137,6 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     versionRef.current = Math.max(versionRef.current, snapshot?.canvasVersion ?? 0);
   }
   const registrationsRef = useRef(new Map<string, ToolRegistration>());
-  const registrationRetriesRef = useRef(new Map<string, number>());
-  const retryTimersRef = useRef(new Map<string, number>());
   const stateWaitersRef = useRef(new Set<StateWaiter>());
   const privatePromptCacheRef = useRef(new Map<string, Promise<PrivatePrompt>>());
   const drawStrokeChainRef = useRef<Promise<void>>(Promise.resolve());
@@ -227,91 +224,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       ? names.filter((name) => name !== "ready_next")
       : names;
   }, [consumedReadyNextKey, enabled, guessesEnabled, roomInviteCode, seatId, snapshot, supported]);
-  const availabilityKey = toolNames.join(":");
   const availableToolsRef = useRef(new Set<string>());
   availableToolsRef.current = new Set(toolNames);
-
-  const cancelRemoval = (registration: ToolRegistration) => {
-    if (registration.removalTimer !== null) window.clearTimeout(registration.removalTimer);
-    registration.removalTimer = null;
-  };
-
-  const confirmRemoval = async (name: string, registration: ToolRegistration) => {
-    const context = document.modelContext;
-    if (!context) return true;
-    for (const delay of [0, 16, 32, 64, 128, 256]) {
-      if (delay > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
-      if (registrationsRef.current.get(name) !== registration) return true;
-      try {
-        const tools = await context.getTools();
-        if (!tools.some((candidate) => candidate.name === name)) return true;
-      } catch {
-        // A transient inspection failure must not permit a duplicate registration.
-      }
-    }
-    return false;
-  };
-
-  const retireRegistration = (name: string, registration: ToolRegistration) => {
-    if (registration.status === "retiring") return;
-    cancelRemoval(registration);
-    registration.status = "retiring";
-    registration.controller.abort();
-    markRegistered(name, false);
-    const finishRetirement = () => {
-      void confirmRemoval(name, registration).then((removed) => {
-        if (registrationsRef.current.get(name) !== registration) return;
-        if (removed) {
-          registrationsRef.current.delete(name);
-          const retries = registrationRetriesRef.current.get(name) ?? 0;
-          if (availableToolsRef.current.has(name) && retries > 0) {
-            if (retries <= 3 && !retryTimersRef.current.has(name)) {
-              const timer = window.setTimeout(() => {
-                retryTimersRef.current.delete(name);
-                setRegistryEpoch((epoch) => epoch + 1);
-              }, 250 * 2 ** (retries - 1));
-              retryTimersRef.current.set(name, timer);
-            }
-          } else {
-            setRegistryEpoch((epoch) => epoch + 1);
-          }
-          return;
-        }
-        registration.removalTimer = window.setTimeout(() => {
-          registration.removalTimer = null;
-          finishRetirement();
-        }, 500);
-      });
-    };
-    finishRetirement();
-  };
-
-  const scheduleRemoval = (name: string, registration: ToolRegistration) => {
-    if (registration.status === "retiring") return;
-    if (registration.removalTimer !== null) window.clearTimeout(registration.removalTimer);
-    if (availableToolsRef.current.has(name)) {
-      cancelRemoval(registration);
-      return;
-    }
-    const now = Date.now();
-    const acknowledgementAt = registration.lastSettledAt + TOOL_ACK_GRACE_MS;
-    if (registration.inFlight === 0 && (registration.lastSettledAt === 0 || now >= acknowledgementAt)) {
-      retireRegistration(name, registration);
-      return;
-    }
-    const retryAt = registration.inFlight > 0 ? now + 50 : acknowledgementAt;
-    registration.removalTimer = window.setTimeout(() => {
-      registration.removalTimer = null;
-      if (availableToolsRef.current.has(name)) {
-        return;
-      }
-      if (registration.inFlight > 0 || Date.now() < registration.lastSettledAt + TOOL_ACK_GRACE_MS) {
-        scheduleRemoval(name, registration);
-        return;
-      }
-      retireRegistration(name, registration);
-    }, Math.max(0, retryAt - now));
-  };
 
   const run = async <T,>(
     name: string,
@@ -322,10 +236,9 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   ) => {
     const registration = registrationsRef.current.get(name);
     if (!availableToolsRef.current.has(name) || !registration || registration.controller.signal.aborted) {
-      throw new Error("This tool is no longer available for your current role. Inspect match state and use the newly listed tools.");
+      throw new Error("This action is not available for your current role or phase. Call get_match_state and follow its exact nextAction.");
     }
     const signal = executionSignal ?? registration.controller.signal;
-    registration.inFlight += 1;
     const startedAt = Date.now();
     const id = crypto.randomUUID();
     const inputSummary = summarizeInput(name, input);
@@ -355,14 +268,9 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
         ? { ...item, status: "error", outputSummary: message, durationMs: Date.now() - startedAt }
         : item));
       throw reason;
-    } finally {
-      registration.inFlight = Math.max(0, registration.inFlight - 1);
-      registration.lastSettledAt = Date.now();
-      if (!availableToolsRef.current.has(name)) scheduleRemoval(name, registration);
     }
   };
 
-  const availableTools = availableToolsRef.current;
   const tool = (definition: WebMCP.ModelContextTool): WebMCP.ModelContextTool => definition;
   const definitions: WebMCP.ModelContextTool[] = [
     tool({
@@ -410,7 +318,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     }),
   ];
 
-  if (availableTools.has("start_practice")) {
+  {
     definitions.push(
       tool({
         name: "start_practice",
@@ -433,7 +341,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     );
   }
 
-  if (availableTools.has("play_mcpencil")) {
+  {
     definitions.push(
       tool({
         name: "play_mcpencil",
@@ -487,7 +395,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     );
   }
 
-  if (availableTools.has("configure_match")) definitions.push(tool({
+  definitions.push(tool({
     name: "configure_match",
     title: "Configure MCPencil match",
     description: "Set the lobby's total rounds and drawing time. Use only when the user asks to change game settings. Practice supports 2, 4, or 6 rounds; team modes support 4, 6, or 8. Drawing time supports 45, 60, or 90 seconds. Only the agent host can call this before play begins.",
@@ -530,7 +438,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     }, compactCommand),
   }));
 
-  if (availableTools.has("start_match")) definitions.push(tool({
+  definitions.push(tool({
     name: "start_match", title: "Start MCPencil match", description: "Start once both teams have two live, ready players. Agent seats are ready automatically.",
     inputSchema: EmptySchema,
     execute: (input, options) => run("start_match", input, options?.signal, async (signal) => {
@@ -543,7 +451,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     }, compactCommand),
   }));
 
-  if (availableTools.has("draw_stroke")) {
+  {
     definitions.push(
       tool({
         name: "draw_stroke", title: "Draw one stroke now",
@@ -609,7 +517,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     );
   }
 
-  if (availableTools.has("submit_guesses")) definitions.push(tool({
+  definitions.push(tool({
     name: "submit_guesses", title: "Submit up to three visible guesses",
     description: "Visually inspect the rendered canvas, then immediately submit 1-3 concise, ordered, distinct candidates. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer. After an incorrect result, reconsider the whole drawing when canvasVersion changes instead of fixating on the first idea.",
     inputSchema: {
@@ -670,7 +578,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     }, (output) => `${output.correct ? "Correct" : `${output.attempts.length} guesses displayed`}; canvas v${output.canvasVersion}`),
   }));
 
-  if (availableTools.has("get_round_result")) {
+  {
     definitions.push(tool({
       name: "get_round_result", title: "Read round result",
       description: "Read the most recently completed round's revealed prompt, outcome, timing, strokes, and tool usage. Practice results are explicitly collaborative and never report a team winner or competitive score. This remains available during the following round.",
@@ -690,7 +598,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       }, () => "Round result read"),
     }));
   }
-  if (availableTools.has("ready_next")) definitions.push(tool({
+  definitions.push(tool({
     name: "ready_next", title: "Ready for next round", description: "Confirm that your seat is ready for the next round. This tool is only available during the results intermission while your seat is unready.",
     inputSchema: EmptySchema,
     execute: (input, options) => run("ready_next", input, options?.signal, async (signal) => {
@@ -721,70 +629,50 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 
   useEffect(() => {
     const context = document.modelContext;
-    if (!context) {
+    if (!context) return;
+
+    // Keep the document-facing descriptor set fixed. Role and phase changes only
+    // update availableToolsRef, which remains the invocation authorization gate.
+    // React StrictMode replays effects in development. Deferring registration by
+    // one task lets its synthetic cleanup cancel the first setup before it can
+    // mutate the document's WebMCP descriptors.
+    let disposed = false;
+    const registrationTimer = window.setTimeout(() => {
+      if (disposed) return;
+      const definitionsByName = new Map(definitions.map((definition) => [definition.name, definition]));
+      for (const name of WEBMCP_REGISTERED_TOOL_NAMES) {
+        const definition = definitionsByName.get(name);
+        if (!definition || registrationsRef.current.has(name)) continue;
+        const registration: ToolRegistration = {
+          controller: new AbortController(),
+          status: "registering",
+        };
+        registrationsRef.current.set(name, registration);
+        void context.registerTool(definition, { signal: registration.controller.signal }).then(() => {
+          if (registrationsRef.current.get(name) !== registration || registration.status === "retiring") return;
+          registration.status = "registered";
+          markRegistered(name, true);
+        }).catch((reason) => {
+          if (registrationsRef.current.get(name) !== registration || registration.status === "retiring") return;
+          registrationsRef.current.delete(name);
+          markRegistered(name, false);
+          console.error(`Could not register WebMCP tool ${name}.`, reason);
+        });
+      }
+    }, 0);
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(registrationTimer);
       for (const registration of registrationsRef.current.values()) {
-        if (registration.removalTimer !== null) window.clearTimeout(registration.removalTimer);
+        registration.status = "retiring";
         registration.controller.abort();
       }
       registrationsRef.current.clear();
-      return;
-    }
-
-    const desiredNames = availableToolsRef.current;
-    for (const [name, timer] of retryTimersRef.current) {
-      if (desiredNames.has(name)) continue;
-      window.clearTimeout(timer);
-      retryTimersRef.current.delete(name);
-      registrationRetriesRef.current.delete(name);
-    }
-    for (const [name, registration] of registrationsRef.current) {
-      if (desiredNames.has(name)) {
-        // An aborted registration cannot be revived. Keep its tombstone until
-        // getTools confirms removal, then a registry epoch creates one successor.
-        if (registration.status !== "retiring") cancelRemoval(registration);
-      }
-      else scheduleRemoval(name, registration);
-    }
-    for (const definition of definitions) {
-      const existing = registrationsRef.current.get(definition.name);
-      if (existing) {
-        if (existing.status !== "retiring") cancelRemoval(existing);
-        continue;
-      }
-      const registration: ToolRegistration = {
-        controller: new AbortController(),
-        inFlight: 0,
-        lastSettledAt: 0,
-        removalTimer: null,
-        status: "registering",
-      };
-      registrationsRef.current.set(definition.name, registration);
-      void context.registerTool(definition, { signal: registration.controller.signal }).then(() => {
-        if (registrationsRef.current.get(definition.name) !== registration || registration.status === "retiring") return;
-        registration.status = "registered";
-        markRegistered(definition.name, true);
-        registrationRetriesRef.current.delete(definition.name);
-        if (!availableToolsRef.current.has(definition.name)) scheduleRemoval(definition.name, registration);
-      }).catch(() => {
-        if (registrationsRef.current.get(definition.name) !== registration) return;
-        if (registration.status === "retiring") return;
-        const retries = (registrationRetriesRef.current.get(definition.name) ?? 0) + 1;
-        registrationRetriesRef.current.set(definition.name, retries);
-        // Even a rejected registration may have partially reached the browser.
-        // Reuse the confirmed-removal path before any retry can reuse this name.
-        retireRegistration(definition.name, registration);
-      });
-    }
-  }, [availabilityKey, registryEpoch, supported]);
+    };
+  }, [supported]);
 
   useEffect(() => () => {
-    for (const registration of registrationsRef.current.values()) {
-      if (registration.removalTimer !== null) window.clearTimeout(registration.removalTimer);
-      registration.controller.abort();
-    }
-    registrationsRef.current.clear();
-    for (const timer of retryTimersRef.current.values()) window.clearTimeout(timer);
-    retryTimersRef.current.clear();
     for (const waiter of Array.from(stateWaitersRef.current)) {
       settleStateWaiter(waiter, snapshotRef.current, new DOMException("The page was closed.", "AbortError"));
     }
