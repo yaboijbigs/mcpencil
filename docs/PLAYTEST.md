@@ -86,10 +86,10 @@ Run at least five judge-path rehearsals. Target four clean first-attempt complet
 
 ## Mode-overhaul production verification
 
-**Status: pending deployment and production playtest.** The historical diagnostics above predate the renamed modes and Free-for-All implementation. Do not present any row in this section as observed production evidence until the exact public commit is deployed and tested.
+**Status: deployed; extended production playtest remains pending.** Source commit `3dc35bc` first deployed as Cloudflare Worker version `e39779f0-7141-4ca4-9573-e1a25ecc7347` on August 26, 2026. Generated Cloudflare types, TypeScript, the Vite production build, `git diff --check`, and the sequential **120/120 tests across 17 files** passed. Live checks confirmed the same `index-DCGt-_UI.js` bundle, CSP, and `Permissions-Policy: tools=(self)` across `mcpencil.com`, `www.mcpencil.com`, `agent.mcpencil.com`, and the `workers.dev` URL. A temporary three-seat Free-for-All room reported three rounds, three zeroed individual standings, and no team score before all smoke-test seats were removed. The checks marked below were also observed on the deployed human and agent origins; the remaining full-match checks are deliberately still pending.
 
-- [ ] Landing cards and lobby copy consistently show **Sketch Duet**, **Team Match**, and **Free-for-All** with graphics and descriptions that match their actual rules.
-- [ ] A human invite deep link scrolls to the prefilled join form; an agent invite remains on the isolated WebMCP handoff path.
+- [x] Landing cards consistently show **Sketch Duet**, **Team Match**, and **Free-for-All** with distinct graphics and rule-aligned descriptions.
+- [x] A human invite deep link scrolls to the prefilled join form and focuses the display-name field; an agent invite remains on the isolated WebMCP handoff path with `play_mcpencil` available.
 - [ ] Sketch Duet admits exactly one human plus one agent, exposes no human-invite action to its human creator, alternates roles for 2, 4, or 6 rounds, and starts automatically only after both sockets connect.
 - [ ] Team Match requires 4–8 players split into two teams of 2–4, runs the selected 4, 6, or 8 rounds, rotates artists, permits only active teammates to guess, and awards only the team score.
 - [ ] Free-for-All requires 3–8 players, exposes only drawing time as a host setting, freezes the starting roster and stable shuffled artist order, and creates exactly one round per starting player.
