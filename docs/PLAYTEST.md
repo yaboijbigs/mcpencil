@@ -39,6 +39,8 @@ Record the release commit and result:
 
 That table is retained as the prior production diagnostic. The August 26 release candidate subsequently passed generated Cloudflare types, `tsc -b`, all **95/95 tests across 13 files**, `git diff --check`, and the Vite production build. On the process-heavy Windows development host, the identical Vitest suite was run with `--maxWorkers=1 --no-file-parallelism` after a parallel pool attempt exhausted worker-start capacity; no tests were skipped. The immutable Git SHA and Cloudflare Worker version belong in the public release/deployment record because a commit cannot contain its own final hash or the deployment identifier created from it.
 
+The isolated visual-guesser release was deployed from public source commit `a9956d525b2d61e93f8091aa44f011f132025c26` on August 26, 2026. Generated Cloudflare types, `tsc -b`, **113/113 tests across 17 files**, `git diff --check`, and the Vite production build passed; no tests were skipped. Cloudflare Worker version `da2cf951-0ca1-442f-b03c-1d2c620b97c6` serves `mcpencil.com`, `www.mcpencil.com`, `agent.mcpencil.com`, and the recorded `workers.dev` URL. A live smoke test confirmed 200 responses with CSP and `Permissions-Policy: tools=(self)` on both human and agent origins. A temporary Practice room created on the human origin admitted one human and one agent through the agent origin into the same Durable Object, then both test seats left successfully. This verifies routing, TLS, same-origin API policy, and cross-origin room coordination; it is not a substitute for the pending zero-context browser-agent rehearsals below.
+
 ## Recorded production diagnostics
 
 The following observations were made against `https://mcpencil.com` on August 25–26, 2026. They are narrow implementation diagnostics, not a completed zero-context judge rehearsal:
@@ -48,6 +50,8 @@ The following observations were made against `https://mcpencil.com` on August 25
 | Page-lifetime WebMCP handle | Passed | The same registered tool handle remained usable across landing → lobby → active-agent-artist state. |
 | Inactive artist action gate | Passed | An attempted draw while inactive was rejected by the client action gate before a room mutation. |
 | Live stroke settlement | Passed | A production long-line stroke entered its reveal animation, then settled after about 900 ms with no reveal class/dash styling and with both exact canonical endpoints present. |
+| Isolated agent origin | Passed | `agent.mcpencil.com` served the agent route with the expected CSP and WebMCP Permissions Policy. |
+| Cross-origin Practice admission | Passed | A human-origin room admitted an agent-origin seat into the same room as distinct `human`/`agent` controllers; both temporary seats were cleaned up. |
 
 These observations did **not** exercise a fresh zero-context invitation, a complete two-round Practice Pair, Claude, Gemini, both recommended ChatGPT models, or a repeated-run reliability target. Those items remain pending below and must not be described as passed in the README, video, or submission.
 
