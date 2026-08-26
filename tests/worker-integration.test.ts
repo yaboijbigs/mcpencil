@@ -290,6 +290,35 @@ describe("Practice Pair HTTP journey", () => {
     expect(JSON.stringify(await state(agent)).toLocaleLowerCase("en-US"))
       .not.toContain(secondPrompt.prompt.toLocaleLowerCase("en-US"));
 
+    const practiceStub = env.ROOMS.getByName(human.roomCode);
+    await runInDurableObject(practiceStub, async (_instance, durableState) => {
+      const now = Date.now();
+      durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+      await durableState.storage.setAlarm(now + 60_000);
+    });
+    expect(await runDurableObjectAlarm(practiceStub)).toBe(true);
+    const heldForHuman = await state(agent);
+    expect(heldForHuman).toMatchObject({
+      phase: "round-prep",
+      roundIndex: 1,
+      endsAt: null,
+      canvasVersion: secondState.canvasVersion,
+      guesses: [],
+    });
+    expect(JSON.stringify(heldForHuman).toLocaleLowerCase("en-US"))
+      .not.toContain(secondPrompt.prompt.toLocaleLowerCase("en-US"));
+    await runInDurableObject(practiceStub, async (_instance, durableState) => {
+      expect(await durableState.storage.getAlarm()).toBeNull();
+    });
+
+    const prematureAgentGuess = await command(agent, {
+      type: "submit_guess",
+      guess: secondPrompt.prompt,
+      origin: "webmcp",
+    });
+    expect(prematureAgentGuess.status).toBe(409);
+    expect(await body<ApiFailure>(prematureAgentGuess)).toMatchObject({ code: "WRONG_PHASE" });
+
     const humanDraw = await command(human, {
       type: "draw_batch",
       expectedVersion: secondState.canvasVersion,
@@ -298,6 +327,11 @@ describe("Practice Pair HTTP journey", () => {
       origin: "human-ui",
     });
     expect(humanDraw.status).toBe(200);
+    expect(await body<CommandResult>(humanDraw)).toMatchObject({
+      accepted: true,
+      canvasVersion: secondState.canvasVersion + 1,
+    });
+    expect(await state(agent)).toMatchObject({ phase: "drawing", roundIndex: 1 });
 
     const secondGuess = await command(agent, {
       type: "submit_guess",

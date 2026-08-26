@@ -145,7 +145,12 @@ interface CommandExecution {
   alarm: "set" | "delete" | null;
 }
 
-type DeadlineTransition = "prep-started" | "round-ended" | "result-extended" | "round-advanced";
+type DeadlineTransition =
+  | "prep-held"
+  | "prep-started"
+  | "round-ended"
+  | "result-extended"
+  | "round-advanced";
 
 const SCHEMA_VERSION = 1;
 const HUMAN_DRAW_RATE_LIMIT_MS = 40;
@@ -1243,6 +1248,24 @@ export class GameRoom extends DurableObject<Env> {
       return null;
     }
     if (room.phase === "round-prep") {
+      const artist = room.artist_seat_id === null ? null : this.requireSeat(room.artist_seat_id);
+      if (room.mode === "practice" && artist?.controller === "human") {
+        this.ctx.storage.transactionSync(() => {
+          this.ctx.storage.sql.exec(
+            "UPDATE room SET revision = revision + 1, ends_at = NULL WHERE id = 1",
+          );
+          this.insertActivitySync({
+            roundIndex: room.round_index,
+            kind: "system",
+            label: "human_prompt_held",
+            detail: "Practice waits for the human artist's first stroke.",
+            seatId: artist.id,
+            canvasVersion: room.canvas_version,
+            now,
+          });
+        });
+        return "prep-held";
+      }
       this.ctx.storage.transactionSync(() => this.startDrawingClockSync(room, now));
       return "prep-started";
     }

@@ -58,7 +58,7 @@ stateDiagram-v2
 Server invariants:
 
 - `lobby`: no prompt is accessible; only readiness, seat configuration, and host start are mutable.
-- `round-prep`: the artist may access the private prompt and send one opening stroke, but guessing is disabled and the 90-second round clock has not started. An eight-second alarm prevents a stalled artist from freezing the room.
+- `round-prep`: the artist may access the private prompt and send one opening stroke, but guessing is disabled and the 90-second round clock has not started. An eight-second fallback starts a stalled agent/arena turn; Practice Pair's human-artist turn instead clears that alarm and stays private until the human's first stroke.
 - `drawing`: exactly one artist and one active team exist; `endsAt` is persisted; only the artist may draw; only active-team non-artists may guess.
 - `round-end`: drawing and guessing are immutable; the answer and full guess transcript are visible for at least eight seconds. All connected players may advance it after that minimum; a 15-second hard deadline advances it automatically.
 - `match-end`: scores, analytics, and replay are immutable.

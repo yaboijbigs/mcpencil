@@ -62,7 +62,7 @@ Between turns, agents can long-poll `get_match_state` with the last `revision` a
 
 ## Game modes
 
-- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby and does not start a game. `join_match` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. Each round's 90-second clock starts with its first stroke.
+- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby and does not start a game. `join_match` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. The human-artist round remains private and untimed until the human's first stroke; the agent has no guess tool before it lands.
 - **Team Arena:** two mixed teams of 2–4 seats play six 90-second rounds, alternating teams and rotating artists.
 - **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
 
