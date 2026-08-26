@@ -143,7 +143,9 @@ interface CommandExecution {
 }
 
 const SCHEMA_VERSION = 1;
-const RATE_LIMIT_MS = 750;
+const HUMAN_DRAW_RATE_LIMIT_MS = 40;
+const AGENT_DRAW_RATE_LIMIT_MS = 250;
+const GUESS_RATE_LIMIT_MS = 350;
 const MAX_ACTIVITY = 80;
 const MAX_SOCKET_MESSAGE_BYTES = 2_048;
 
@@ -803,7 +805,12 @@ export class GameRoom extends DurableObject<Env> {
       duplicate: false,
     };
     this.ctx.storage.transactionSync(() => {
-      this.enforceRateLimitSync(seat.id, "draw_batch", now);
+      this.enforceRateLimitSync(
+        seat.id,
+        "draw_batch",
+        now,
+        command.origin === "human-ui" ? HUMAN_DRAW_RATE_LIMIT_MS : AGENT_DRAW_RATE_LIMIT_MS,
+      );
       command.primitives.forEach((primitive, index) => {
         this.ctx.storage.sql.exec(
           `INSERT INTO canvas_events(
@@ -879,7 +886,12 @@ export class GameRoom extends DurableObject<Env> {
     if (last === undefined) throw new ApiError(409, "NOTHING_TO_UNDO", "There is no drawing batch to undo.");
     const nextVersion = room.canvas_version + 1;
     this.ctx.storage.transactionSync(() => {
-      this.enforceRateLimitSync(seat.id, "draw_batch", now);
+      this.enforceRateLimitSync(
+        seat.id,
+        "draw_batch",
+        now,
+        origin === "human-ui" ? HUMAN_DRAW_RATE_LIMIT_MS : AGENT_DRAW_RATE_LIMIT_MS,
+      );
       this.ctx.storage.sql.exec(
         "UPDATE canvas_events SET reverted = 1 WHERE round_index = ? AND batch_id = ?",
         room.round_index,
@@ -929,7 +941,7 @@ export class GameRoom extends DurableObject<Env> {
     const nextRevision = room.revision + 1;
 
     this.ctx.storage.transactionSync(() => {
-      this.enforceRateLimitSync(seat.id, "submit_guess", now);
+      this.enforceRateLimitSync(seat.id, "submit_guess", now, GUESS_RATE_LIMIT_MS);
       this.ctx.storage.sql.exec(
         `INSERT INTO guesses(
           id, round_index, seat_id, display_name, guess_text, origin, is_correct, created_at
@@ -1205,13 +1217,13 @@ export class GameRoom extends DurableObject<Env> {
     }
   }
 
-  private enforceRateLimitSync(seatId: string, action: string, now: number): void {
+  private enforceRateLimitSync(seatId: string, action: string, now: number, minimumIntervalMs: number): void {
     const prior = this.rows<SqlRecord & { last_at: number }>(
       "SELECT last_at FROM rate_limits WHERE seat_id = ? AND action = ?",
       seatId,
       action,
     )[0];
-    if (prior !== undefined && now - prior.last_at < RATE_LIMIT_MS) {
+    if (prior !== undefined && now - prior.last_at < minimumIntervalMs) {
       throw new ApiError(429, "RATE_LIMITED", "Please wait a moment before trying again.");
     }
     this.ctx.storage.sql.exec(

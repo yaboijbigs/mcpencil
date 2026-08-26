@@ -31,6 +31,7 @@ describe("guess normalization", () => {
   it("does not accept semantic near-misses without a curated alias", () => {
     expect(isGuessCorrect("helicopter", "hot air balloon", ["balloon"])).toBe(false);
     expect(isGuessCorrect("tower", "lighthouse", ["light house"])).toBe(false);
+    expect(isGuessCorrect("volcano", "sleepy volcano", ["sleeping volcano"])).toBe(false);
   });
 
   it("recognizes conservative close guesses after normalization", () => {

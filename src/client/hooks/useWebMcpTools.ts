@@ -3,7 +3,7 @@ import { z } from "zod";
 import {
   DrawBatchCommandSchema,
   PrimitiveSchema,
-  canGuess,
+  isArtist,
   type CommandResult,
   type ControllerType,
   type PrivatePrompt,
@@ -11,7 +11,7 @@ import {
   type RoomSnapshot,
   type TeamId,
 } from "../../shared/game";
-import { webMcpToolNames } from "../webMcpAvailability";
+import { compactWebMcpState, webMcpToolNames } from "../webMcpAvailability";
 
 export interface LensInvocation {
   id: string;
@@ -73,6 +73,11 @@ const DrawInput = z.object({
   primitives: z.array(PrimitiveSchema).min(1).max(12),
 }).strict();
 
+const MatchStateInput = z.object({
+  afterRevision: z.number().int().min(0).optional(),
+  waitMs: z.number().int().min(0).max(25_000).optional(),
+}).strict();
+
 const TOOL_ACK_GRACE_MS = 400;
 
 interface ToolRegistration {
@@ -80,6 +85,16 @@ interface ToolRegistration {
   inFlight: number;
   lastSettledAt: number;
   removalTimer: number | null;
+  status: "registering" | "registered" | "retiring";
+}
+
+interface StateWaiter {
+  afterRevision: number;
+  timeoutId: number;
+  signal: AbortSignal;
+  onAbort: () => void;
+  resolve: (snapshot: RoomSnapshot | null) => void;
+  reject: (reason: unknown) => void;
 }
 
 export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, command, privatePrompt, startPractice, joinMatch }: UseWebMcpToolsOptions) {
@@ -87,6 +102,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   const [invocations, setInvocations] = useState<LensInvocation[]>([]);
   const [registeredToolNames, setRegisteredToolNames] = useState<Set<string>>(() => new Set());
   const [registryEpoch, setRegistryEpoch] = useState(0);
+  const [consumedReadyNextKey, setConsumedReadyNextKey] = useState<string | null>(null);
   const snapshotRef = useRef(snapshot);
   snapshotRef.current = snapshot;
   const seatIdRef = useRef(seatId);
@@ -105,6 +121,54 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   const registrationsRef = useRef(new Map<string, ToolRegistration>());
   const registrationRetriesRef = useRef(new Map<string, number>());
   const retryTimersRef = useRef(new Map<string, number>());
+  const stateWaitersRef = useRef(new Set<StateWaiter>());
+
+  const settleStateWaiter = (waiter: StateWaiter, value: RoomSnapshot | null, reason?: unknown) => {
+    if (!stateWaitersRef.current.delete(waiter)) return;
+    window.clearTimeout(waiter.timeoutId);
+    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    if (reason === undefined) waiter.resolve(value);
+    else waiter.reject(reason);
+  };
+
+  const waitForRevision = (afterRevision: number, waitMs: number, signal: AbortSignal) => {
+    const current = snapshotRef.current;
+    if (current === null || current.revision > afterRevision || waitMs === 0) return Promise.resolve(current);
+    return new Promise<RoomSnapshot | null>((resolve, reject) => {
+      const waiter: StateWaiter = {
+        afterRevision,
+        timeoutId: 0,
+        signal,
+        onAbort: () => {},
+        resolve,
+        reject,
+      };
+      waiter.onAbort = () => settleStateWaiter(
+        waiter,
+        snapshotRef.current,
+        new DOMException("The state wait was cancelled.", "AbortError"),
+      );
+      waiter.timeoutId = window.setTimeout(
+        () => settleStateWaiter(waiter, snapshotRef.current),
+        waitMs,
+      );
+      stateWaitersRef.current.add(waiter);
+      signal.addEventListener("abort", waiter.onAbort, { once: true });
+      if (signal.aborted) {
+        waiter.onAbort();
+        return;
+      }
+      const latest = snapshotRef.current;
+      if (latest !== null && latest.revision > afterRevision) settleStateWaiter(waiter, latest);
+    });
+  };
+
+  useEffect(() => {
+    if (!snapshot) return;
+    for (const waiter of Array.from(stateWaitersRef.current)) {
+      if (snapshot.revision > waiter.afterRevision) settleStateWaiter(waiter, snapshot);
+    }
+  }, [snapshot?.revision]);
 
   const markRegistered = (name: string, registered: boolean) => {
     setRegisteredToolNames((current) => {
@@ -117,8 +181,13 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   };
 
   const toolNames = useMemo(() => {
-    return supported ? webMcpToolNames(snapshot, seatId, guessesEnabled) : [];
-  }, [guessesEnabled, seatId, snapshot, supported]);
+    if (!supported) return [];
+    const names = webMcpToolNames(snapshot, seatId, guessesEnabled);
+    const readyNextKey = snapshot ? `${snapshot.roomCode}:${snapshot.roundIndex}` : null;
+    return readyNextKey === consumedReadyNextKey
+      ? names.filter((name) => name !== "ready_next")
+      : names;
+  }, [consumedReadyNextKey, guessesEnabled, seatId, snapshot, supported]);
   const availabilityKey = toolNames.join(":");
   const availableToolsRef = useRef(new Set<string>());
   availableToolsRef.current = new Set(toolNames);
@@ -128,7 +197,58 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     registration.removalTimer = null;
   };
 
+  const confirmRemoval = async (name: string, registration: ToolRegistration) => {
+    const context = document.modelContext;
+    if (!context) return true;
+    for (const delay of [0, 16, 32, 64, 128, 256]) {
+      if (delay > 0) await new Promise<void>((resolve) => window.setTimeout(resolve, delay));
+      if (registrationsRef.current.get(name) !== registration) return true;
+      try {
+        const tools = await context.getTools();
+        if (!tools.some((candidate) => candidate.name === name)) return true;
+      } catch {
+        // A transient inspection failure must not permit a duplicate registration.
+      }
+    }
+    return false;
+  };
+
+  const retireRegistration = (name: string, registration: ToolRegistration) => {
+    if (registration.status === "retiring") return;
+    cancelRemoval(registration);
+    registration.status = "retiring";
+    registration.controller.abort();
+    markRegistered(name, false);
+    const finishRetirement = () => {
+      void confirmRemoval(name, registration).then((removed) => {
+        if (registrationsRef.current.get(name) !== registration) return;
+        if (removed) {
+          registrationsRef.current.delete(name);
+          const retries = registrationRetriesRef.current.get(name) ?? 0;
+          if (availableToolsRef.current.has(name) && retries > 0) {
+            if (retries <= 3 && !retryTimersRef.current.has(name)) {
+              const timer = window.setTimeout(() => {
+                retryTimersRef.current.delete(name);
+                setRegistryEpoch((epoch) => epoch + 1);
+              }, 250 * 2 ** (retries - 1));
+              retryTimersRef.current.set(name, timer);
+            }
+          } else {
+            setRegistryEpoch((epoch) => epoch + 1);
+          }
+          return;
+        }
+        registration.removalTimer = window.setTimeout(() => {
+          registration.removalTimer = null;
+          finishRetirement();
+        }, 500);
+      });
+    };
+    finishRetirement();
+  };
+
   const scheduleRemoval = (name: string, registration: ToolRegistration) => {
+    if (registration.status === "retiring") return;
     if (registration.removalTimer !== null) window.clearTimeout(registration.removalTimer);
     if (availableToolsRef.current.has(name)) {
       cancelRemoval(registration);
@@ -137,9 +257,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     const now = Date.now();
     const acknowledgementAt = registration.lastSettledAt + TOOL_ACK_GRACE_MS;
     if (registration.inFlight === 0 && (registration.lastSettledAt === 0 || now >= acknowledgementAt)) {
-      registration.controller.abort();
-      if (registrationsRef.current.get(name) === registration) registrationsRef.current.delete(name);
-      markRegistered(name, false);
+      retireRegistration(name, registration);
       return;
     }
     const retryAt = registration.inFlight > 0 ? now + 50 : acknowledgementAt;
@@ -152,9 +270,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         scheduleRemoval(name, registration);
         return;
       }
-      registration.controller.abort();
-      if (registrationsRef.current.get(name) === registration) registrationsRef.current.delete(name);
-      markRegistered(name, false);
+      retireRegistration(name, registration);
     }, Math.max(0, retryAt - now));
   };
 
@@ -212,11 +328,40 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     tool({
       name: "get_match_state",
       title: "Inspect MCPencil match",
-      description: "Read the current room, phase, role, scores, timer, seats, and canvas version.",
-      inputSchema: EmptySchema,
+      description: "Read current role and turn data. Between turns, pass afterRevision plus waitMs up to 25000 to resolve on the next WebSocket update instead of polling. Agent artists receive authorized privatePrompt; guessers receive compact canvasGeometry and recentGuesses.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          afterRevision: { type: "integer", minimum: 0, description: "Optional last revision; wait for something newer." },
+          waitMs: { type: "integer", minimum: 0, maximum: 25000, description: "Optional wait for a newer revision. Use 25000 between turns." },
+        },
+        additionalProperties: false,
+      },
       annotations: { readOnlyHint: true, untrustedContentHint: true },
       execute: (input, { signal }) =>
-        run("get_match_state", input, signal, () => compactState(snapshotRef.current, seatIdRef.current), () => `State read at canvas v${versionRef.current}`),
+        run("get_match_state", input, signal, async () => {
+          const parsed = MatchStateInput.parse(input);
+          const currentSnapshot = parsed.afterRevision === undefined
+            ? snapshotRef.current
+            : await waitForRevision(parsed.afterRevision, parsed.waitMs ?? 0, signal);
+          const currentSeatId = seatIdRef.current;
+          const state = {
+            ...compactWebMcpState(currentSnapshot, currentSeatId),
+            ...(parsed.afterRevision !== undefined && currentSnapshot?.revision === parsed.afterRevision
+              ? { waitTimedOut: true }
+              : {}),
+          };
+          if (!isActiveAgentArtist(currentSnapshot, currentSeatId)) return state;
+          const prompt = await actionsRef.current.privatePrompt(signal);
+          return {
+            ...state,
+            privatePrompt: prompt.prompt,
+            promptCategory: prompt.category,
+            drawNow: "Within 5 seconds, call draw_batch with only 2-4 primitives that show the broad silhouette. Do not inspect the blank canvas or plan/refine first. Add detail afterward in 3-6 primitive batches.",
+          };
+        }, () => isActiveAgentArtist(snapshotRef.current, seatIdRef.current)
+          ? `State and private prompt delivered at canvas v${versionRef.current} · prompt masked`
+          : `State read at canvas v${versionRef.current}`),
     }),
   ];
 
@@ -271,7 +416,12 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
           if (!roomCode) throw new Error("roomCode is required when the page URL has no valid ?room= code.");
           const controller = parsed.controller ?? "agent";
           await actionsRef.current.joinMatch({ ...parsed, roomCode, controller });
-          return { accepted: true, roomCode, controller, next: "Your agent seat is ready automatically. Practice starts when both sockets connect; arena hosts can start once four live seats are ready." };
+          return {
+            accepted: true,
+            roomCode,
+            controller,
+            next: "Your seat is ready automatically. Call get_match_state now, then keep one call pending with afterRevision and waitMs: 25000. A role change will wake it immediately; if privatePrompt is present, skip get_draw_prompt and draw within 5 seconds.",
+          };
         }),
       }),
     );
@@ -287,7 +437,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     definitions.push(
       tool({
         name: "get_draw_prompt", title: "Read private drawing prompt",
-        description: "Read your secret prompt plus the live canvas version and timer. Never disclose the prompt; communicate only through drawing tools.",
+        description: "Fallback only: read the secret prompt if get_match_state did not already return privatePrompt. Never disclose it; communicate only through drawing tools.",
         inputSchema: EmptySchema, annotations: { readOnlyHint: true },
         execute: (input, { signal }) => run("get_draw_prompt", input, signal, async () => {
           const prompt = await actionsRef.current.privatePrompt(signal);
@@ -295,13 +445,13 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
             ...prompt,
             canvasVersion: versionRef.current,
             remainingMs: remainingMs(snapshotRef.current),
-            guidance: "Immediately send a recognizable 3-6 primitive draw_batch. Then chain each returned canvasVersion into the next batch without another state read.",
+            guidance: "Within 5 seconds, send only 2-4 primitives for the broad silhouette. Do not inspect the blank canvas or plan/refine first. Then chain each returned canvasVersion into 3-6 primitive refinement batches without another state read.",
           };
         }, () => "Private prompt delivered with fast-turn state (masked in Lens)"),
       }),
       tool({
         name: "draw_batch", title: "Draw vector primitives",
-        description: "Draw on the 1000x700 canvas. Immediately add a recognizable 3-6 primitive silhouette, then refine in more small batches. expectedCanvasVersion and idempotencyKey are optional. Chain each response.canvasVersion into the next batch without calling get_match_state.",
+        description: "Draw on the 1000x700 canvas. First call: immediately send only 2-4 primitives for a broad silhouette within 5 seconds of privatePrompt; do not inspect the blank canvas or plan/refine first. Later calls may add 3-6 primitives. Chain response.canvasVersion without another state read.",
         inputSchema: {
           type: "object",
           properties: {
@@ -362,11 +512,25 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     if (availableTools.has("ready_next")) definitions.push(tool({
       name: "ready_next", title: "Ready for next round", description: "Confirm that your seat is ready for the next round.",
       inputSchema: EmptySchema,
-      execute: (input, { signal }) => run("ready_next", input, signal, () => actionsRef.current.command({
-        type: "ready_next",
-        expectedRoundIndex: snapshotRef.current?.roundIndex ?? 0,
-        origin: "webmcp",
-      }, signal), compactCommand),
+      execute: (input, { signal }) => run("ready_next", input, signal, async () => {
+        const activeSnapshot = snapshotRef.current;
+        const readyKey = activeSnapshot ? `${activeSnapshot.roomCode}:${activeSnapshot.roundIndex}` : null;
+        if (readyKey) setConsumedReadyNextKey(readyKey);
+        try {
+          const result = await actionsRef.current.command({
+            type: "ready_next",
+            expectedRoundIndex: activeSnapshot?.roundIndex ?? 0,
+            origin: "webmcp",
+          }, signal);
+          return {
+            ...result,
+            next: "Call get_match_state once now. If it is still round-end, call it again with that state's revision as afterRevision and waitMs: 25000; it will wake on the next round and include privatePrompt if you are the artist.",
+          };
+        } catch (reason) {
+          if (readyKey) setConsumedReadyNextKey((current) => current === readyKey ? null : current);
+          throw reason;
+        }
+      }, compactCommand),
     }));
   }
 
@@ -389,13 +553,17 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
       registrationRetriesRef.current.delete(name);
     }
     for (const [name, registration] of registrationsRef.current) {
-      if (desiredNames.has(name)) cancelRemoval(registration);
+      if (desiredNames.has(name)) {
+        // An aborted registration cannot be revived. Keep its tombstone until
+        // getTools confirms removal, then a registry epoch creates one successor.
+        if (registration.status !== "retiring") cancelRemoval(registration);
+      }
       else scheduleRemoval(name, registration);
     }
     for (const definition of definitions) {
       const existing = registrationsRef.current.get(definition.name);
       if (existing) {
-        cancelRemoval(existing);
+        if (existing.status !== "retiring") cancelRemoval(existing);
         continue;
       }
       const registration: ToolRegistration = {
@@ -403,26 +571,23 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         inFlight: 0,
         lastSettledAt: 0,
         removalTimer: null,
+        status: "registering",
       };
       registrationsRef.current.set(definition.name, registration);
-      markRegistered(definition.name, true);
       void context.registerTool(definition, { signal: registration.controller.signal }).then(() => {
+        if (registrationsRef.current.get(definition.name) !== registration || registration.status === "retiring") return;
+        registration.status = "registered";
+        markRegistered(definition.name, true);
         registrationRetriesRef.current.delete(definition.name);
+        if (!availableToolsRef.current.has(definition.name)) scheduleRemoval(definition.name, registration);
       }).catch(() => {
         if (registrationsRef.current.get(definition.name) !== registration) return;
-        cancelRemoval(registration);
-        registration.controller.abort();
-        registrationsRef.current.delete(definition.name);
-        markRegistered(definition.name, false);
+        if (registration.status === "retiring") return;
         const retries = (registrationRetriesRef.current.get(definition.name) ?? 0) + 1;
         registrationRetriesRef.current.set(definition.name, retries);
-        if (availableToolsRef.current.has(definition.name) && retries <= 3) {
-          const timer = window.setTimeout(() => {
-            retryTimersRef.current.delete(definition.name);
-            setRegistryEpoch((epoch) => epoch + 1);
-          }, 250 * 2 ** (retries - 1));
-          retryTimersRef.current.set(definition.name, timer);
-        }
+        // Even a rejected registration may have partially reached the browser.
+        // Reuse the confirmed-removal path before any retry can reuse this name.
+        retireRegistration(definition.name, registration);
       });
     }
   }, [availabilityKey, registryEpoch, supported]);
@@ -435,6 +600,9 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     registrationsRef.current.clear();
     for (const timer of retryTimersRef.current.values()) window.clearTimeout(timer);
     retryTimersRef.current.clear();
+    for (const waiter of Array.from(stateWaitersRef.current)) {
+      settleStateWaiter(waiter, snapshotRef.current, new DOMException("The page was closed.", "AbortError"));
+    }
   }, []);
 
   return {
@@ -444,19 +612,9 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   };
 }
 
-function compactState(snapshot: RoomSnapshot | null, seatId: string | null) {
-  if (!snapshot) return { phase: "landing", availableActions: ["start_practice", "join_match"] };
-  const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
-  return {
-    roomCode: snapshot.roomCode, mode: snapshot.mode, phase: snapshot.phase, round: snapshot.roundIndex + 1,
-    totalRounds: snapshot.totalRounds, yourSeatId: seatId,
-    yourRole: snapshot.artistSeatId === seatId ? "artist" : canGuess(snapshot, seatId) ? "guesser" : "spectator",
-    yourTeam: seat?.team, activeTeam: snapshot.activeTeam,
-    artist: snapshot.seats.find((candidate) => candidate.id === snapshot.artistSeatId)?.name ?? null,
-    remainingMs: snapshot.endsAt ? Math.max(0, snapshot.endsAt - Date.now()) : null,
-    canvasVersion: snapshot.canvasVersion, strokeCount: snapshot.canvas.length, scores: snapshot.scores,
-    seats: snapshot.seats.map(({ id, name, team, controller, isReady, isConnected }) => ({ id, name, team, controller, isReady, isConnected })),
-  };
+function isActiveAgentArtist(snapshot: RoomSnapshot | null, seatId: string | null): snapshot is RoomSnapshot {
+  if (!snapshot || !isArtist(snapshot, seatId)) return false;
+  return snapshot.seats.find((seat) => seat.id === seatId)?.controller === "agent";
 }
 
 function compactCommand(result: CommandResult) {

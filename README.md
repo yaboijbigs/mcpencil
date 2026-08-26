@@ -41,11 +41,11 @@ The collapsible **WebMCP Lens** makes this visible to judges: registered tools, 
 
 ## WebMCP tool contract
 
-Tools are registered imperatively with `document.modelContext.registerTool`. A phase-scoped `AbortController` removes obsolete registrations as roles change. Because removing a registration does not terminate an invocation already executing, handlers also use execution signals, generation guards, and server-side role/phase checks to make in-flight work safe. Read tools use `readOnlyHint`; results containing player-authored names or guesses use `untrustedContentHint`.
+Tools are registered imperatively with `document.modelContext.registerTool`. Per-tool `AbortController`s retire obsolete registrations as roles change, and the client confirms browser-side removal before registering a successor with the same name. In-flight acknowledgements remain safe through execution signals and server-side role/phase checks. Read tools use `readOnlyHint`; results containing player-authored names, guesses, or canvas geometry use `untrustedContentHint`.
 
 | Tool | Available when | Mutates | What it does |
 |---|---|---:|---|
-| `get_match_state` | Always | No | Returns a compact, role-safe match summary with the caller's role, team, timer, seats, score, and canvas version. Never returns the secret prompt. |
+| `get_match_state` | Always | No | Returns a role-safe summary. An authenticated active agent artist also receives its private prompt so it can draw immediately; an eligible agent guesser receives compact canvas geometry and recent guesses. No other role receives either private prompt or guesser-only geometry. |
 | `start_practice` | Landing/practice | Yes | Creates the two-round agent-draws/human-draws judge path and joins the caller. |
 | `join_match` | Landing/practice | Yes | Joins a five-character room code with a display name, team preference, and human/agent controller label. |
 | `start_match` | Lobby, host only | Yes | Starts an eligible match after server-side lobby validation. |
@@ -56,7 +56,9 @@ Tools are registered imperatively with `document.modelContext.registerTool`. A p
 | `get_round_result` | Round end | No | Returns the revealed answer, points, elapsed time, stroke count, and tool-call count. |
 | `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
 
-`draw_batch` accepts only `line`, `polyline`, `ellipse`, `rectangle`, `arc`, and `polygon` primitives on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are all enforced. Text, URLs, uploads, arbitrary SVG/path strings, and out-of-range geometry are rejected.
+Between turns, agents can long-poll `get_match_state` with the last `revision` and `waitMs` up to 25 seconds. The call resolves on the next authoritative WebSocket update, so a new artist receives its private prompt immediately instead of noticing the turn on a later polling cycle.
+
+`draw_batch` accepts only `line`, `polyline`, `ellipse`, `rectangle`, `arc`, and `polygon` primitives on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are all enforced. Text, URLs, uploads, arbitrary SVG/path strings, and out-of-range geometry are rejected. Live WebMCP batches reveal their first primitive immediately, then visibly draw each remaining mark in order with adaptive backlog catch-up.
 
 ## Game modes
 
@@ -140,7 +142,7 @@ After deployment, verify DNS/custom-domain activation in the same Cloudflare acc
 
 ## Security and integrity
 
-- A private artist prompt is returned only to the authenticated active artist. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guess` remains unregistered until the human explicitly hides and unmounts the prompt card.
+- A private artist prompt is returned only to the authenticated active artist, either in its role-safe state response or the fallback prompt tool. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guess` remains unregistered until the human explicitly hides and unmounts the prompt card.
 - Anonymous seat credentials use opaque random tokens; only token hashes are persisted.
 - Names and guesses are length-limited data, never HTML or instructions.
 - Every mutation is authorized against room phase, seat, role, team, expiry, expected canvas version, and rate limits.

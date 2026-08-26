@@ -50,6 +50,33 @@ describe("original prompt deck", () => {
     expect(isGuessCorrect("an octopus playing the drums", octopus.prompt, octopus.aliases)).toBe(true);
     expect(isGuessCorrect("drum-playing octopus", octopus.prompt, octopus.aliases)).toBe(true);
   });
+
+  it("requires meaningful descriptors and actions unless a broad alias is intentional", () => {
+    const card = (prompt: string) => PROMPT_DECK.find((candidate) => candidate.prompt === prompt)!;
+
+    const requiredConcepts = [
+      ["sleepy volcano", "volcano"],
+      ["birthday meteor", "meteor"],
+      ["dancing teapot", "teapot"],
+      ["snowman vacation", "snowman"],
+      ["roller-skating octopus", "octopus"],
+      ["bicycle with square wheels", "bicycle"],
+    ] as const;
+    for (const [prompt, incompleteGuess] of requiredConcepts) {
+      const promptCard = card(prompt);
+      expect(isGuessCorrect(incompleteGuess, promptCard.prompt, promptCard.aliases)).toBe(false);
+    }
+
+    const intendedBroadAliases = [
+      ["tiny dragon", "dragon"],
+      ["beach castle", "sandcastle"],
+      ["cactus wearing a hat", "cowboy cactus"],
+    ] as const;
+    for (const [prompt, fairGuess] of intendedBroadAliases) {
+      const promptCard = card(prompt);
+      expect(isGuessCorrect(fairGuess, promptCard.prompt, promptCard.aliases)).toBe(true);
+    }
+  });
 });
 
 describe("safe Worker responses", () => {

@@ -478,8 +478,8 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
             <div className={`role-banner team-${snapshot.activeTeam}`}>
               <span className="role-icon">{humanArtist ? <PencilIcon /> : agentArtist ? <BotIcon /> : <SparkIcon />}</span>
               <div>
-                <small>{humanArtist ? "YOU ARE DRAWING" : agentArtist ? "YOUR AGENT IS DRAWING" : humanGuesser ? "GUESS FOR YOUR TEAM" : agentGuesser ? "YOU DRAW — YOUR AGENT GUESSES" : "SPECTATING"}</small>
-                <strong>{humanArtist ? (privatePromptGate === "hidden" ? "Prompt hidden — draw it from memory." : prompt?.prompt ?? "Fetching your secret prompt…") : agentArtist ? "Ask your agent to get its prompt and draw." : humanGuesser ? "Name it before the clock runs out." : agentGuesser ? "Draw clearly, then ask your agent to inspect the canvas." : `Watching ${artist?.name ?? "the artist"}`}</strong>
+                <small>{humanArtist ? "YOU ARE DRAWING" : primaryAgentArtist ? "YOU ARE DRAWING" : agentArtist ? "YOUR AGENT IS DRAWING" : humanGuesser ? "GUESS FOR YOUR TEAM" : primaryAgentGuesser ? "YOU ARE GUESSING" : agentGuesser ? "YOUR AGENT IS GUESSING" : "SPECTATING"}</small>
+                <strong>{humanArtist ? (privatePromptGate === "hidden" ? "Prompt hidden — draw it from memory." : prompt?.prompt ?? "Fetching your secret prompt…") : primaryAgentArtist ? "Get the private prompt and draw the first silhouette immediately." : agentArtist ? "Ask your agent to get its prompt and draw." : humanGuesser ? "Name it before the clock runs out." : primaryAgentGuesser ? "Inspect every canvas update and guess broadly before refining." : agentGuesser ? "Keep drawing while your agent inspects each update." : `Watching ${artist?.name ?? "the artist"}`}</strong>
                 {humanArtist && prompt && privatePromptGate !== "hidden" ? <span>{prompt.category} · do not write words or letters</span> : null}
               </div>
               {agentArtist || agentGuesser ? <span className="agent-ready-pill"><span className="pulse-dot" /> WebMCP tools ready</span> : null}
@@ -490,7 +490,7 @@ function GameRoom({ snapshot, seatId, companionSeatId, busy, lens, onCommand, on
             {humanGuesser ? <form className="guess-composer" onSubmit={(event) => void submitGuess(event)}>
               <span className="guess-pencil"><PencilIcon /></span><label><span className="sr-only">Your guess</span><input autoFocus value={guess} onChange={(event) => setGuess(event.target.value)} maxLength={80} placeholder="What is the drawing?" autoComplete="off" /></label>
               <button className="primary-button" type="submit" disabled={busy || !guess.trim()}>Guess <ArrowIcon /></button>
-            </form> : agentGuesser ? <div className="agent-guess-note"><BotIcon /><div><strong>Your agent has <code>submit_guess</code>.</strong><span>Ask it to inspect the canvas and make its best guess.</span></div></div> : null}
+            </form> : agentGuesser ? <div className="agent-guess-note"><BotIcon /><div><strong>{primaryAgentGuesser ? <>Use <code>get_match_state</code>, then <code>submit_guess</code>.</> : <>Your agent has <code>submit_guess</code>.</>}</strong><span>{primaryAgentGuesser ? "Read the latest geometry and guess after every canvas version." : "Ask it to inspect the canvas and make its best guess."}</span></div></div> : null}
           </section>
 
           <aside className="game-sidebar">

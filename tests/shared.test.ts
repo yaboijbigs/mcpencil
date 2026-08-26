@@ -13,7 +13,7 @@ import {
   type VectorPrimitive,
 } from "../src/shared/game";
 import { arcPath, pointsAttribute, remainingSeconds } from "../src/shared/format";
-import { webMcpToolNames } from "../src/client/webMcpAvailability";
+import { compactWebMcpState, webMcpToolNames } from "../src/client/webMcpAvailability";
 
 const line: VectorPrimitive = {
   type: "line",
@@ -279,7 +279,7 @@ describe("dynamic WebMCP availability", () => {
   it("withholds submit_guess until the human prompt is hidden", () => {
     const agentGuesser = snapshot({
       seats: snapshot().seats.map((seat) =>
-        seat.id === "guesser" ? { ...seat, controller: "agent" as const } : seat,
+        seat.id === "guesser" ? { ...seat, controller: "agent" as const, isReady: false } : seat,
       ),
     });
     expect(webMcpToolNames(agentGuesser, "guesser", false)).toEqual(["get_match_state"]);
@@ -292,6 +292,60 @@ describe("dynamic WebMCP availability", () => {
       "get_round_result",
       "ready_next",
     ]);
+    expect(webMcpToolNames({
+      ...agentGuesser,
+      phase: "round-end",
+      seats: agentGuesser.seats.map((seat) => seat.id === "guesser" ? { ...seat, isReady: true } : seat),
+    }, "guesser")).toEqual(["get_match_state", "get_round_result"]);
+  });
+
+  it("gives only active agent guessers bounded current-round geometry and recent guesses", () => {
+    const agentSnapshot = snapshot({
+      seats: snapshot().seats.map((seat) => seat.id === "guesser"
+        ? { ...seat, controller: "agent" as const, isReady: false }
+        : seat),
+      canvasVersion: 70,
+      canvas: Array.from({ length: 70 }, (_, index) => ({
+        id: `event-${index}`,
+        batchId: `batch-${index}`,
+        canvasVersion: index + 1,
+        roundIndex: 0,
+        seatId: "artist",
+        origin: "webmcp" as const,
+        createdAt: index,
+        primitive: index === 69
+          ? {
+              type: "polyline" as const,
+              points: Array.from({ length: 25 }, (__, point) => ({ x: point + 0.4, y: point + 0.6 })),
+              color: "ink" as const,
+              width: 7 as const,
+            }
+          : { ...line, x1: index, x2: index },
+      })),
+      guesses: Array.from({ length: 10 }, (_, index) => ({
+        id: `guess-${index}`,
+        roundIndex: 0,
+        seatId: "guesser",
+        displayName: "Agent",
+        guess: `answer ${index}`,
+        origin: "webmcp" as const,
+        isCorrect: false,
+        createdAt: index,
+      })),
+    });
+    const state = compactWebMcpState(agentSnapshot, "guesser") as {
+      canvasGeometry: VectorPrimitive[];
+      recentGuesses: Array<{ text: string; correct: boolean }>;
+      guidance: string;
+    };
+    expect(state.canvasGeometry).toHaveLength(60);
+    expect(state.canvasGeometry[0]).toMatchObject({ type: "line", x1: 0 });
+    expect(state.canvasGeometry[20]).toMatchObject({ type: "line", x1: 30 });
+    expect(state.canvasGeometry.at(-1)).toMatchObject({ type: "polyline", points: expect.any(Array) });
+    expect((state.canvasGeometry.at(-1) as Extract<VectorPrimitive, { type: "polyline" }>).points).toHaveLength(10);
+    expect(state.recentGuesses.map(({ text }) => text)).toEqual(Array.from({ length: 8 }, (_, index) => `answer ${index + 2}`));
+    expect(state.guidance).toContain("immediately");
+    expect(compactWebMcpState(agentSnapshot, "artist")).not.toHaveProperty("canvasGeometry");
   });
 });
 

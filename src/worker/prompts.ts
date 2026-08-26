@@ -13,7 +13,7 @@ export const PROMPT_DECK: readonly PromptCard[] = [
     aliases: ["gardening robot", "robot gardening", "robot watering a plant", "robot watering the plant"],
   },
   { prompt: "hot air balloon", category: "travel", aliases: ["air balloon", "balloon"] },
-  { prompt: "sleepy volcano", category: "nature", aliases: ["volcano", "sleeping volcano"] },
+  { prompt: "sleepy volcano", category: "nature", aliases: ["sleeping volcano"] },
   { prompt: "pancake tower", category: "food", aliases: ["stack of pancakes", "pancakes"] },
   { prompt: "moon mailbox", category: "space", aliases: ["mailbox on the moon", "space mailbox"] },
   { prompt: "roller-skating octopus", category: "animals", aliases: ["octopus skating", "skating octopus"] },

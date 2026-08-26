@@ -16,6 +16,7 @@ import {
   EraserIcon,
   LineIcon,
   PenToolIcon,
+  PencilIcon,
   RectangleIcon,
   UndoIcon,
 } from "./Icons";
@@ -73,6 +74,7 @@ export function CanvasBoard({
   const [revealQueue, setRevealQueue] = useState<string[]>([]);
   const revealQueueLengthRef = useRef(revealQueue.length);
   revealQueueLengthRef.current = revealQueue.length;
+  const [pencilEventId, setPencilEventId] = useState<string | null>(null);
   const knownEventIdsRef = useRef(new Set(events.map((event) => event.id)));
   const seenEventIdsRef = useRef(new Set(events.map((event) => event.id)));
   const canonicalEventIdsRef = useRef(new Set(events.map((event) => event.id)));
@@ -85,6 +87,11 @@ export function CanvasBoard({
     [events, prefersReducedMotion, revealedEventIds],
   );
   const nextRevealId = revealQueue[0] ?? null;
+  const pencilEvent = pencilEventId === null
+    ? null
+    : events.find((event) => event.id === pencilEventId) ?? null;
+  const pencilStartPoint = pencilEvent ? primitiveStartPoint(pencilEvent.primitive) : null;
+  const pencilPoint = pencilEvent ? primitiveEndPoint(pencilEvent.primitive) : null;
   const draft = useMemo(
     () =>
       gesture
@@ -112,15 +119,24 @@ export function CanvasBoard({
     progressiveEventIdsRef.current = new Set(
       Array.from(progressiveEventIdsRef.current).filter((id) => canonicalIds.has(id)),
     );
+    const progressiveIncomingIds: string[] = [];
     if (prefersReducedMotion) {
       progressiveEventIdsRef.current.clear();
     } else {
       for (const event of incomingEvents) {
         if (event.origin === "webmcp" && !restoredEventIds.has(event.id)) {
           progressiveEventIdsRef.current.add(event.id);
+          progressiveIncomingIds.push(event.id);
         }
       }
     }
+
+    // A live batch should start painting as soon as it reaches the browser. Hold
+    // only the remaining primitives so a twelve-shape call never pops in at once.
+    const immediateRevealId = revealQueueLengthRef.current === 0
+      ? progressiveIncomingIds.shift() ?? null
+      : null;
+    if (immediateRevealId !== null) setPencilEventId(immediateRevealId);
 
     setRevealedEventIds((current) => {
       const next = new Set(Array.from(current).filter((id) => canonicalIds.has(id)));
@@ -129,6 +145,7 @@ export function CanvasBoard({
           next.add(event.id);
         }
       }
+      if (immediateRevealId !== null) next.add(immediateRevealId);
       if (prefersReducedMotion) {
         for (const event of events) next.add(event.id);
       }
@@ -139,12 +156,13 @@ export function CanvasBoard({
       if (prefersReducedMotion) return [];
       const next = current.filter((id) => canonicalIds.has(id));
       const queuedIds = new Set(next);
-      for (const event of incomingEvents) {
-        if (event.origin === "webmcp" && !restoredEventIds.has(event.id) && !queuedIds.has(event.id)) {
-          next.push(event.id);
-          queuedIds.add(event.id);
+      for (const eventId of progressiveIncomingIds) {
+        if (!queuedIds.has(eventId)) {
+          next.push(eventId);
+          queuedIds.add(eventId);
         }
       }
+      revealQueueLengthRef.current = next.length;
       return next;
     });
   }, [events, prefersReducedMotion]);
@@ -159,15 +177,28 @@ export function CanvasBoard({
           next.add(nextRevealId);
           return next;
         });
+        setPencilEventId(nextRevealId);
       }
-      setRevealQueue((current) =>
-        current[0] === nextRevealId
+      setRevealQueue((current) => {
+        const next = current[0] === nextRevealId
           ? current.slice(1)
-          : current.filter((id) => id !== nextRevealId),
-      );
+          : current.filter((id) => id !== nextRevealId);
+        revealQueueLengthRef.current = next.length;
+        return next;
+      });
     }, revealDelayFor(nextRevealId, revealQueueLengthRef.current));
     return () => window.clearTimeout(timer);
   }, [nextRevealId, prefersReducedMotion]);
+
+  useEffect(() => {
+    if (prefersReducedMotion) {
+      setPencilEventId(null);
+      return;
+    }
+    if (pencilEventId === null || revealQueue.length > 0) return;
+    const timer = window.setTimeout(() => setPencilEventId(null), 520);
+    return () => window.clearTimeout(timer);
+  }, [pencilEventId, prefersReducedMotion, revealQueue.length]);
 
   useEffect(() => {
     if (!canDraw) return;
@@ -344,6 +375,16 @@ export function CanvasBoard({
             {draft ? <PrimitiveMark primitive={draft} origin="human-ui" draft /> : null}
           </g>
         </svg>
+        {pencilPoint && !prefersReducedMotion ? (
+          <span
+            key={pencilEventId}
+            className="live-agent-pencil"
+            style={pencilPositionStyle(pencilStartPoint ?? pencilPoint, pencilPoint)}
+            aria-hidden="true"
+          >
+            <PencilIcon />
+          </span>
+        ) : null}
         {!canDraw && visibleEvents.length === 0 ? (
           <div className="empty-canvas-note" aria-hidden="true">
             <span className="pencil-scribble">✎</span>
@@ -375,6 +416,7 @@ export function PrimitiveMark({
     strokeLinecap: "round" as const,
     strokeLinejoin: "round" as const,
     vectorEffect: "non-scaling-stroke" as const,
+    pathLength: 1,
     className: `${draft ? "draft-mark" : "ink-mark"} origin-${origin}${animateArrival ? " is-revealing" : ""}`,
   };
 
@@ -497,17 +539,67 @@ function strokeWidthLabel(width: StrokeWidth) {
 
 function revealDelayFor(eventId: string, backlog: number) {
   const [minimum, range] = backlog > 18
-    ? [24, 16]
-    : backlog > 10
-      ? [40, 25]
-      : backlog > 6
-        ? [55, 30]
-        : [70, 40];
+    ? [55, 35]
+    : backlog > 12
+      ? [105, 45]
+      : [180, 80];
   let hash = 0;
   for (let index = 0; index < eventId.length; index += 1) {
     hash = (hash * 31 + eventId.charCodeAt(index)) % (range + 1);
   }
   return minimum + hash;
+}
+
+function primitiveEndPoint(primitive: VectorPrimitive): Point {
+  switch (primitive.type) {
+    case "line":
+      return { x: primitive.x2, y: primitive.y2 };
+    case "polyline":
+    case "polygon":
+      return primitive.points.at(-1) ?? primitive.points[0] ?? { x: 0, y: 0 };
+    case "ellipse":
+      return { x: primitive.cx + primitive.rx, y: primitive.cy };
+    case "rectangle":
+      return { x: primitive.x + primitive.rectWidth, y: primitive.y + primitive.rectHeight };
+    case "arc": {
+      const radians = ((primitive.endAngle - 90) * Math.PI) / 180;
+      return {
+        x: primitive.cx + primitive.radius * Math.cos(radians),
+        y: primitive.cy + primitive.radius * Math.sin(radians),
+      };
+    }
+  }
+}
+
+function primitiveStartPoint(primitive: VectorPrimitive): Point {
+  switch (primitive.type) {
+    case "line":
+      return { x: primitive.x1, y: primitive.y1 };
+    case "polyline":
+    case "polygon":
+      return primitive.points[0] ?? { x: 0, y: 0 };
+    case "ellipse":
+      return { x: primitive.cx - primitive.rx, y: primitive.cy };
+    case "rectangle":
+      return { x: primitive.x, y: primitive.y };
+    case "arc": {
+      const radians = ((primitive.startAngle - 90) * Math.PI) / 180;
+      return {
+        x: primitive.cx + primitive.radius * Math.cos(radians),
+        y: primitive.cy + primitive.radius * Math.sin(radians),
+      };
+    }
+  }
+}
+
+function pencilPositionStyle(start: Point, end: Point): React.CSSProperties {
+  const percent = (value: number, maximum: number) => `${Math.max(0, Math.min(100, (value / maximum) * 100))}%`;
+  return {
+    "--pencil-start-left": percent(start.x, CANVAS_WIDTH),
+    "--pencil-start-top": percent(start.y, CANVAS_HEIGHT),
+    "--pencil-end-left": percent(end.x, CANVAS_WIDTH),
+    "--pencil-end-top": percent(end.y, CANVAS_HEIGHT),
+  } as React.CSSProperties;
 }
 
 function usePrefersReducedMotion() {
