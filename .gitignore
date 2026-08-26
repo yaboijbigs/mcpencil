@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.wrangler/
+.dev.vars
+.env
+.env.*
+!.env.example
+.platform-cache/
+.npm-cache/
+coverage/
+*.log
+.DS_Store
+Thumbs.db
+

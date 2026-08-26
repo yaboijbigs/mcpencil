@@ -1,0 +1,40 @@
+{
+  "name": "mcpencil",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A realtime human-agent draw-and-guess game powered by WebMCP.",
+  "license": "MIT",
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "npm run build && wrangler dev",
+    "build": "tsc -b && vite build",
+    "typecheck": "tsc -b",
+    "types": "wrangler types",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "deploy": "npm run build && wrangler deploy",
+    "check": "npm run types && npm run typecheck && npm test && npm run build"
+  },
+  "dependencies": {
+    "@cloudflare/workers-types": "5.20260825.1",
+    "cloudflare": "^4.1.0",
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.1.0",
+    "@types/react": "19.2.18",
+    "@types/react-dom": "19.2.5",
+    "@vitejs/plugin-react": "6.1.0",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "webmcp-types": "^0.1.5",
+    "wrangler": "4.126.0"
+  },
+  "engines": {
+    "node": ">=24"
+  }
+}
