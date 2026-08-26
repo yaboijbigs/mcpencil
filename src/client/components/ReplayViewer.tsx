@@ -46,6 +46,9 @@ export function ReplayViewer({
   );
   const agentGuessCount = roundGuesses.filter((guess) => guess.origin === "webmcp").length;
   const humanGuessCount = roundGuesses.length - agentGuessCount;
+  const agentDrawCallCount = new Set(
+    ordered.filter((event) => event.origin === "webmcp").map((event) => event.batchId),
+  ).size;
   const [visible, setVisible] = useState(ordered.length);
   const [playing, setPlaying] = useState(false);
 
@@ -103,7 +106,7 @@ export function ReplayViewer({
           <StatCard label="Answer" value={selected?.prompt ?? result?.prompt ?? "—"} accent />
           <StatCard label="Time to guess" value={selected ? `${((selected.endedAt - selected.startedAt) / 1000).toFixed(1)}s` : result ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"} />
           <StatCard label="Vector strokes" value={String(selected ? ordered.length : result?.strokeCount ?? analytics.totalStrokes)} />
-          <StatCard label="Agent tool calls" value={String(selected ? new Set(ordered.filter((event) => event.origin === "webmcp").map((event) => event.batchId)).size : result?.toolCallCount ?? analytics.totalToolCalls)} />
+          <StatCard label="Agent round moves" value={String(selected ? agentDrawCallCount + agentGuessCount : result?.toolCallCount ?? analytics.totalToolCalls)} />
           <StatCard label="Human actions" value={String(analytics.byOrigin["human-ui"])} />
           <StatCard label="WebMCP actions" value={String(analytics.byOrigin.webmcp)} />
           <StatCard label="All guesses" value={String(roundGuesses.length)} />
