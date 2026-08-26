@@ -9,6 +9,6 @@ dist/
 .npm-cache/
 coverage/
 *.log
+*.tsbuildinfo
 .DS_Store
 Thumbs.db
-

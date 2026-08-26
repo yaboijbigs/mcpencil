@@ -204,6 +204,7 @@ export const JoinRoomRequestSchema = z.object({
 const ReadyCommandSchema = z.object({
   type: z.literal("ready_up"),
   ready: z.boolean(),
+  origin: OriginSchema,
 }).strict();
 
 const ConfigureSeatCommandSchema = z.object({
@@ -212,7 +213,10 @@ const ConfigureSeatCommandSchema = z.object({
   controller: ControllerSchema,
 }).strict();
 
-const StartMatchCommandSchema = z.object({ type: z.literal("start_match") }).strict();
+const StartMatchCommandSchema = z.object({
+  type: z.literal("start_match"),
+  origin: OriginSchema,
+}).strict();
 
 export const DrawBatchCommandSchema = z.object({
   type: z.literal("draw_batch"),
@@ -234,7 +238,10 @@ const SubmitGuessCommandSchema = z.object({
   origin: OriginSchema,
 }).strict();
 
-const ReadyNextCommandSchema = z.object({ type: z.literal("ready_next") }).strict();
+const ReadyNextCommandSchema = z.object({
+  type: z.literal("ready_next"),
+  origin: OriginSchema,
+}).strict();
 
 export const RoomCommandSchema = z.discriminatedUnion("type", [
   ReadyCommandSchema,
@@ -260,6 +267,8 @@ export interface SeatCredentials {
 }
 
 export interface JoinRoomResponse extends SeatCredentials {
+  /** Present in Practice Pair so one page can retain separate human and agent identities. */
+  companion?: SeatCredentials;
   snapshot: RoomSnapshot;
 }
 

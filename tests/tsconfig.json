@@ -1,0 +1,16 @@
+{
+  "extends": "../tsconfig.worker.json",
+  "compilerOptions": {
+    "composite": false,
+    "types": [
+      "@cloudflare/vitest-plugin/types",
+      "@cloudflare/workers-types"
+    ]
+  },
+  "include": [
+    "./**/*.ts",
+    "../src/shared/**/*.ts",
+    "../src/worker/**/*.ts",
+    "../worker-configuration.d.ts"
+  ]
+}

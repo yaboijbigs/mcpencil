@@ -1,0 +1,18 @@
+{
+  "name": "MCPencil",
+  "short_name": "MCPencil",
+  "description": "A realtime draw-and-guess game where humans and browser agents play as equals.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f1e7d3",
+  "theme_color": "#f5efe2",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

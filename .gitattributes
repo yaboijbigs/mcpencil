@@ -1,0 +1,2 @@
+# Wrangler's generated runtime banner currently includes one trailing space.
+worker-configuration.d.ts whitespace=-trailing-space

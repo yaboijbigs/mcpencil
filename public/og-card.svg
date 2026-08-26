@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
+  <title id="title">MCPencil — Bring your own agent to game night</title>
+  <desc id="desc">A playful paper game board with a pencil, human and agent player cards, and an abstract shared drawing</desc>
+  <rect width="1200" height="630" fill="#f1e7d3"/>
+  <path d="M0 64h1200M0 568h1200" stroke="#d8c8aa" stroke-width="2" stroke-dasharray="8 13"/>
+  <circle cx="1080" cy="82" r="130" fill="#ef654f" opacity=".12"/>
+  <circle cx="93" cy="552" r="165" fill="#3157d5" opacity=".11"/>
+
+  <g transform="translate(72 62)">
+    <rect width="1056" height="506" rx="38" fill="#fffaf0" stroke="#17191d" stroke-width="5"/>
+    <path d="M39 102h978" stroke="#17191d" stroke-width="3" stroke-dasharray="1 14" stroke-linecap="round" opacity=".25"/>
+
+    <g transform="translate(61 42)">
+      <path d="M0 48c14-23 31-25 47-4 13 18 32 18 58-3" fill="none" stroke="#ef654f" stroke-width="8" stroke-linecap="round"/>
+      <g transform="translate(30 -1) rotate(-24 42 16)">
+        <path d="M0 8h82v19H0z" fill="#3157d5" stroke="#17191d" stroke-width="4"/>
+        <path d="m82 8 24 9.5L82 27z" fill="#f2d2a2" stroke="#17191d" stroke-width="4" stroke-linejoin="round"/>
+        <path d="m100 15 6 2.5-6 2.5z" fill="#17191d"/>
+        <path d="M0 8h15v19H0a5 5 0 0 1-5-5v-9a5 5 0 0 1 5-5z" fill="#ef654f" stroke="#17191d" stroke-width="4"/>
+      </g>
+    </g>
+
+    <text x="206" y="98" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="70" font-weight="800" letter-spacing="-3">MCPencil</text>
+    <rect x="781" y="48" width="219" height="54" rx="27" fill="#eaf0ff" stroke="#3157d5" stroke-width="3"/>
+    <circle cx="817" cy="75" r="10" fill="#3c9a67"/>
+    <text x="840" y="84" fill="#2144b3" font-family="Arial, Helvetica, sans-serif" font-size="25" font-weight="700">WebMCP ready</text>
+
+    <g transform="translate(57 139)">
+      <rect width="700" height="310" rx="28" fill="#fffdf7" stroke="#17191d" stroke-width="4"/>
+      <path d="M30 60h640M30 120h640M30 180h640M30 240h640" stroke="#dcd4c5" stroke-width="2" stroke-dasharray="1 11" stroke-linecap="round"/>
+      <path d="M153 226c4-100 73-158 162-153 88 5 141 63 136 153" fill="none" stroke="#3157d5" stroke-width="13" stroke-linecap="round"/>
+      <path d="M185 223c26-57 73-90 128-90 58 0 101 32 111 91" fill="#f2bd35" fill-opacity=".18" stroke="#17191d" stroke-width="9" stroke-linecap="round"/>
+      <circle cx="260" cy="179" r="11" fill="#17191d"/>
+      <circle cx="357" cy="179" r="11" fill="#17191d"/>
+      <path d="M273 207c25 20 48 20 72 0" fill="none" stroke="#ef654f" stroke-width="8" stroke-linecap="round"/>
+      <path d="M525 66v171M489 115h72M489 237h72" stroke="#3c9a67" stroke-width="10" stroke-linecap="round"/>
+      <circle cx="525" cy="55" r="24" fill="#3c9a67" opacity=".2" stroke="#3c9a67" stroke-width="7"/>
+      <g transform="translate(592 252) rotate(-20)">
+        <path d="M0 0h68v14H0z" fill="#ef654f" stroke="#17191d" stroke-width="3"/>
+        <path d="m68 0 18 7-18 7z" fill="#f2d2a2" stroke="#17191d" stroke-width="3"/>
+      </g>
+    </g>
+
+    <g transform="translate(788 139)">
+      <rect width="212" height="141" rx="24" fill="#eaf0ff" stroke="#3157d5" stroke-width="4"/>
+      <circle cx="48" cy="46" r="22" fill="#3157d5"/>
+      <path d="M19 111c4-27 17-41 29-41s26 14 30 41" fill="#3157d5"/>
+      <text x="96" y="50" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800">HUMAN</text>
+      <text x="96" y="84" fill="#3157d5" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700">GUESSING</text>
+      <path d="M96 109h86" stroke="#3157d5" stroke-width="4" stroke-dasharray="7 7"/>
+
+      <rect y="167" width="212" height="141" rx="24" fill="#fff0ec" stroke="#ef654f" stroke-width="4"/>
+      <rect x="24" y="192" width="49" height="42" rx="11" fill="#ef654f"/>
+      <circle cx="40" cy="213" r="5" fill="#fffaf0"/>
+      <circle cx="57" cy="213" r="5" fill="#fffaf0"/>
+      <path d="M34 243h30M48 184v8" stroke="#17191d" stroke-width="4" stroke-linecap="round"/>
+      <text x="96" y="215" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="24" font-weight="800">AGENT</text>
+      <text x="96" y="249" fill="#cf4936" font-family="Arial, Helvetica, sans-serif" font-size="21" font-weight="700">DRAWING</text>
+      <path d="M96 274h86" stroke="#ef654f" stroke-width="4" stroke-dasharray="2 7" stroke-linecap="round"/>
+    </g>
+  </g>
+
+  <rect x="126" y="562" width="948" height="53" rx="26" fill="#17191d"/>
+  <text x="600" y="598" text-anchor="middle" fill="#fffaf0" font-family="Arial, Helvetica, sans-serif" font-size="29" font-weight="700" letter-spacing=".5">Bring your own agent to game night.  •  mcpencil.com</text>
+</svg>
