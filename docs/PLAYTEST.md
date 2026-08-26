@@ -29,18 +29,18 @@ Record the release commit and result:
 
 | Field | Result |
 |---|---|
-| Commit SHA | `TODO_SUBMISSION_SHA` |
-| UTC timestamp | `TODO_SUBMISSION_TEST_TIME` |
-| Node/npm | `TODO_SUBMISSION_NODE_NPM` |
-| Tests | `TODO_SUBMISSION_TEST_RESULT` |
-| Typecheck | `TODO_SUBMISSION_TYPECHECK_RESULT` |
-| Production build | `TODO_SUBMISSION_BUILD_RESULT` |
+| Commit SHA | `22286702b30c05d4b56692ff882a747aa2a107a4` |
+| UTC timestamp | `2026-08-26T01:11:45Z` |
+| Node/npm | `v24.15.0` / `11.12.1` |
+| Tests | 35/35 passed across 4 Cloudflare Vitest files |
+| Typecheck | Passed (`tsc -b`) |
+| Production build | Passed — JS 320.37 kB / 95.55 kB gzip; CSS 41.32 kB / 9.57 kB gzip |
 
 ## 60-second judge-path rehearsal
 
 Use a clean browser profile and the production domain.
 
-- [ ] `https://mcpencil.com` loads with no console errors or mixed content.
+- [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
 - [ ] Agent calls `start_practice` and receives a separate opaque companion seat, not the human's identity.
 - [ ] Round one assigns the companion agent as artist and the human as guesser.

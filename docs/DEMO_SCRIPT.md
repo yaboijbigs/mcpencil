@@ -81,7 +81,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 **Narration:** “MCPencil. Bring your own agent to game night. Play it now at mcpencil.com.”
 
-**On-screen text:** `mcpencil.com` · `TODO_SUBMISSION_PUBLIC_GITHUB_URL`
+**On-screen text:** `mcpencil.com` · `github.com/yaboijbigs/mcpencil`
 
 ## Edit priorities
 

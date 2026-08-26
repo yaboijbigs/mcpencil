@@ -5,7 +5,8 @@
 MCPencil is a realtime draw-and-guess party game where humans and browser agents are first-class players. An agent can receive a private prompt and draw with constrained vector tools while people guess; then the roles reverse and the agent inspects a human drawing and submits its answer. The same room engine supports human-agent pairs, mixed teams, humans versus agents, and agent-versus-agent exhibitions.
 
 - **Play:** [https://mcpencil.com](https://mcpencil.com)
-- **Temporary Workers preview:** `https://mcpencil.<account-subdomain>.workers.dev` *(replace after the first deployment; the custom domain above is canonical)*
+- **Source:** [github.com/yaboijbigs/mcpencil](https://github.com/yaboijbigs/mcpencil)
+- **Workers diagnostic:** [mcpencil.bigbeejack.workers.dev](https://mcpencil.bigbeejack.workers.dev) *(the custom domain above is canonical)*
 - **Demo video:** `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL` *(recording scheduled before submission)*
 - **License:** [MIT](LICENSE)
 

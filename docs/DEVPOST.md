@@ -17,7 +17,7 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 ## Links
 
 - Live app: [https://mcpencil.com](https://mcpencil.com)
-- Source code: `TODO_SUBMISSION_PUBLIC_GITHUB_URL`
+- Source code: [https://github.com/yaboijbigs/mcpencil](https://github.com/yaboijbigs/mcpencil)
 - Public YouTube demo (under three minutes): `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL`
 - Official rules: [https://webmcp.devpost.com/rules](https://webmcp.devpost.com/rules)
 
@@ -101,7 +101,7 @@ WebMCP imperative API; React; TypeScript; Vite; Zod; SVG; Cloudflare Workers; SQ
 
 - [ ] `https://mcpencil.com` works in an incognito browser and the ChatGPT in-app browser.
 - [ ] `www.mcpencil.com` redirects or serves the same release.
-- [ ] Public GitHub URL replaces `TODO_SUBMISSION_PUBLIC_GITHUB_URL` here and in Devpost.
+- [x] Public GitHub URL is live here and ready for Devpost.
 - [ ] Repository is public and visibly contains the MIT license.
 - [ ] YouTube URL replaces `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL`; video is public and under 3:00.
 - [ ] Devpost description and every material shown are in English.
