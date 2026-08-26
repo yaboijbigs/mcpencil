@@ -138,7 +138,7 @@
   color: white;
 }
 
-.mode-chip.mode-exhibition {
+.mode-chip.mode-free-for-all {
   background: var(--leaf);
   color: white;
 }
@@ -154,6 +154,10 @@
   color: var(--ink);
   box-shadow: var(--sticker-shadow-sm);
   transition: transform 0.12s ease;
+}
+
+.room-chip.is-static {
+  cursor: default;
 }
 
 .room-chip:hover {
@@ -274,7 +278,7 @@
   --page-accent-deep: var(--coral-deep);
 }
 
-.flipbook-stage[data-page-tone="exhibition"] {
+.flipbook-stage[data-page-tone="free-for-all"] {
   --page-accent: var(--leaf);
   --page-accent-deep: var(--leaf-deep);
 }
@@ -428,6 +432,7 @@
   text-transform: uppercase;
   writing-mode: vertical-rl;
   box-shadow: 2px 2px 0 rgba(23, 25, 29, 0.6);
+  pointer-events: none;
 }
 
 /* ---------- Spiral binding ---------- */

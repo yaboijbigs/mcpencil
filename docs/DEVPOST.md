@@ -31,11 +31,11 @@ The project began with a funny slip—we called the idea “agentic charades” 
 
 ## What it does
 
-MCPencil is a realtime team draw-and-guess game in which human and agent seats share one game engine.
+MCPencil is a realtime draw-and-guess party game in which human and agent seats share one game engine.
 
-In the hero **Practice Pair** flow, a human creates a room that waits for a browser agent to join through an isolated `agent.mcpencil.com` document. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted and broadcast before acknowledgement, then animates as clients receive it. Then the roles reverse: the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the host-configured clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP. The guesser visually inspects the rendered canvas; a compact canvas-only text raster and bounded geometry provide portable fallbacks, never the prompt, aliases, category, or a semantic label. MCPencil does not claim this is a pixel-only vision benchmark.
+In the hero **Sketch Duet** flow, exactly one human and one browser agent cooperate across alternating drawing and guessing turns. A human-created room waits for its agent to join through an isolated `agent.mcpencil.com` document and starts automatically only after both sockets connect. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted and broadcast before acknowledgement, then animates as clients receive it. When the roles reverse, the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the host-configured clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP. The guesser visually inspects the rendered canvas; a compact canvas-only text raster and bounded geometry provide portable fallbacks, never the prompt, aliases, category, or a semantic label. MCPencil does not claim this is a pixel-only vision benchmark.
 
-**Team Arena** runs a host-configured 4, 6, or 8 timed rounds with two mixed teams. **Exhibition** uses the same seats for humans-versus-agents or agent-versus-agent matches. Practice supports 2, 4, or 6 balanced rounds, and every mode supports 45, 60, or 90 seconds per round. Scoring, artist rotation, realtime synchronization, reconnects, replay, and post-match analytics are server-authoritative.
+**Team Match** puts 4–8 human or agent players into two teams of 2–4. It runs a host-configured 4, 6, or 8 rounds, alternates team turns, rotates artists, and lets only teammates guess. **Free-for-All** freezes a 3–8-player roster and shuffled artist order at start. Every player draws exactly once while every other player guesses simultaneously; the first correct guess ends the round, and both that solver and the artist independently earn `100 + remaining whole seconds`. Individual standings determine the winner and preserve ties. Sketch Duet supports 2, 4, or 6 rounds, Free-for-All derives its round count from the starting roster, and every mode supports 45, 60, or 90 seconds per round. Scoring, artist order, realtime synchronization, reconnects, replay, and post-match analytics are server-authoritative.
 
 A judge-facing **WebMCP Lens** shows the exact tools actionable for the current role and phase, safe call summaries, results, timing, canvas versions, and each seat's declared human-UI or WebMCP origin. This origin is useful provenance, not cryptographic model attestation. Private prompts remain masked.
 
@@ -52,7 +52,7 @@ We do not call an LLM API and do not ship a built-in bot. The intelligence belon
 WebMCP is the player-control layer, not a convenience feature.
 
 - `start_practice` and the zero-context `play_mcpencil` room-invite tool let agents become authenticated game participants without an MCPencil-specific skill or prior conversation.
-- Agent seats ready automatically on join; an agent host can configure a match and only the host can start an eligible team match.
+- Agent seats ready automatically on join. Sketch Duet starts when both required sockets connect; only the host can start an eligible Team Match or Free-for-All and configure the settings that mode permits.
 - `draw_stroke` and `undo_last_stroke` become actionable only for the current agent artist and become non-actionable when the role rotates. Its private prompt is included only in its role-safe `get_match_state` result.
 - A guesser receives `submit_guesses`, browser-visible canvas, a `32 × 22` canvas-only text raster, bounded canonical geometry, and recent guesses, but never the private prompt; up to three ordered candidates become distinct visible room guesses.
 - Round-end tools reveal the result and coordinate the next round.
@@ -72,7 +72,7 @@ Finally, agent drawings can feel like a database update instead of a performance
 
 ## Accomplishments we are proud of
 
-- One symmetric engine supports humans, agents, mixed teams, and agent-versus-agent play without an app-owned bot.
+- One symmetric engine supports cooperative duets, mixed teams, and individual human-agent competition without an app-owned bot.
 - WebMCP role authorization changes are observable and easy to judge through the Lens.
 - Low-level vector constraints make agent strategy visible while keeping rendering deterministic, safe, replayable, and responsive.
 - Durable room state survives reconnects and object eviction; alarms enforce real deadlines without client traffic.
@@ -84,16 +84,16 @@ The strongest WebMCP tools are not remote-control wrappers around existing butto
 
 ## What's next
 
-MCPencil can grow into a public human-agent visual communication benchmark: seeded prompt packs, model-versus-model exhibitions, replay-based evaluation, accessibility-oriented drawing controls, classroom rooms, and community tournaments. The core pattern—people bringing their own agent into social software—extends far beyond games.
+MCPencil can grow into a public human-agent visual communication benchmark: seeded prompt packs, model-versus-model Free-for-All tournaments, replay-based evaluation, accessibility-oriented drawing controls, classroom rooms, and community leagues. The core pattern—people bringing their own agent into social software—extends far beyond games.
 
 ## Judging criteria evidence
 
 | Criterion | Evidence in the build and video |
 |---|---|
 | WebMCP Leverage | Agent joins from an isolated browser document, receives private role-safe state, draws constrained geometry, loses artist actionability on rotation, visually interprets the rendered canvas with disclosed nonsemantic fallbacks, and guesses through WebMCP without a model API or DOM automation. Lens makes authorization and annotations visible. |
-| Execution | Responsive SVG controls, authoritative multiplayer rooms, hibernatable realtime sync, alarms, reconnects, scoring, Practice Pair, replay, analytics, tests, and a focused judge path. |
+| Execution | Responsive SVG controls, authoritative multiplayer rooms, hibernatable realtime sync, alarms, reconnects, team and individual scoring, Sketch Duet, replay, analytics, tests, and a focused judge path. |
 | Potential Impact | A legible example of bring-your-own-agent social software and a reusable visual communication evaluation surface. |
-| Creativity & Ambition | Agents communicate through low-level geometry and reverse roles to interpret human marks inside mixed, competitive realtime teams. |
+| Creativity & Ambition | Agents communicate through low-level geometry, reverse roles to interpret human marks, form mixed teams, and compete in an all-player individual race. |
 
 ## Technologies
 

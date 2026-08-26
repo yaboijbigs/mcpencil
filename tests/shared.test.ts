@@ -63,6 +63,7 @@ function snapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
         isHost: true,
         isReady: true,
         isConnected: true,
+        score: 0,
       },
       {
         id: "guesser",
@@ -72,6 +73,7 @@ function snapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
         isHost: false,
         isReady: true,
         isConnected: true,
+        score: 0,
       },
       {
         id: "opponent",
@@ -81,6 +83,7 @@ function snapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
         isHost: false,
         isReady: true,
         isConnected: true,
+        score: 0,
       },
     ],
     canvas: [],
@@ -233,16 +236,24 @@ describe("role-safe shared helpers", () => {
     expect(isArtist(snapshot({ phase: "round-end" }), "artist")).toBe(false);
   });
 
-  it("allows only active-team non-artists to guess", () => {
+  it("allows only active-team non-artists to guess in Team Match", () => {
     expect(canGuess(snapshot(), "guesser")).toBe(true);
     expect(canGuess(snapshot(), "artist")).toBe(false);
     expect(canGuess(snapshot(), "opponent")).toBe(false);
     expect(canGuess(snapshot({ phase: "lobby" }), "guesser")).toBe(false);
   });
+
+  it("allows every Free-for-All non-artist to guess regardless of legacy team assignment", () => {
+    const freeForAll = snapshot({ mode: "free-for-all", totalRounds: 3 });
+    expect(canGuess(freeForAll, "guesser")).toBe(true);
+    expect(canGuess(freeForAll, "opponent")).toBe(true);
+    expect(canGuess(freeForAll, "artist")).toBe(false);
+    expect(canGuess({ ...freeForAll, phase: "round-end" }, "opponent")).toBe(false);
+  });
 });
 
 describe("dynamic WebMCP availability", () => {
-  it.each([6, 8])("keeps document descriptors stable throughout a %i-round Practice Pair", (totalRounds) => {
+  it.each([2, 4, 6])("keeps document descriptors stable throughout a %i-round Sketch Duet", (totalRounds) => {
     const human = {
       id: "practice-human",
       name: "Human",
@@ -251,6 +262,7 @@ describe("dynamic WebMCP availability", () => {
       isHost: true,
       isReady: true,
       isConnected: true,
+      score: 0,
     };
     const agent = {
       id: "practice-agent",
@@ -260,6 +272,7 @@ describe("dynamic WebMCP availability", () => {
       isHost: false,
       isReady: true,
       isConnected: true,
+      score: 0,
     };
     const activeFingerprints = [JSON.stringify(webMcpToolNames(null, null, true, "ABCDE"))];
     const registeredFingerprints = [JSON.stringify(WEBMCP_REGISTERED_TOOL_NAMES)];
@@ -375,6 +388,7 @@ describe("dynamic WebMCP availability", () => {
         isHost: true,
         isReady: true,
         isConnected: true,
+        score: 0,
       }],
     });
     expect(webMcpToolNames(practiceLobby, null)).toEqual(["get_match_state", "play_mcpencil"]);
@@ -395,6 +409,7 @@ describe("dynamic WebMCP availability", () => {
         isHost: true,
         isReady: true,
         isConnected: true,
+        score: 0,
       }],
     });
     expect(webMcpToolNames(agentPracticeHost, "artist")).toEqual([
@@ -407,7 +422,7 @@ describe("dynamic WebMCP availability", () => {
     });
   });
 
-  it("lets an agent join a human-hosted arena without replacing the host seat", () => {
+  it("lets an agent join a human-hosted Team Match without replacing the host seat", () => {
     const arenaLobby = snapshot({
       phase: "lobby",
       artistSeatId: null,
@@ -419,6 +434,7 @@ describe("dynamic WebMCP availability", () => {
         isHost: true,
         isReady: true,
         isConnected: true,
+        score: 0,
       }],
     });
     expect(webMcpToolNames(arenaLobby, null)).toEqual(["get_match_state", "play_mcpencil"]);
@@ -467,7 +483,152 @@ describe("dynamic WebMCP availability", () => {
     }, "guesser")).toEqual(["get_match_state", "get_round_result"]);
   });
 
-  it("supports the hosted Practice Pair WebMCP lifecycle end to end", () => {
+  it("exposes individual Free-for-All state and guessing to every agent non-artist", () => {
+    const leaderboard = [
+      {
+        seatId: "guesser",
+        name: "Guesser",
+        controller: "human" as const,
+        score: 180,
+        placement: 1,
+        successfulDrawings: 0,
+        correctGuesses: 1,
+        fastestSolveMs: 31_000,
+        averageSolveMs: 31_000,
+      },
+      {
+        seatId: "opponent",
+        name: "Opponent",
+        controller: "agent" as const,
+        score: 180,
+        placement: 1,
+        successfulDrawings: 1,
+        correctGuesses: 0,
+        fastestSolveMs: null,
+        averageSolveMs: null,
+      },
+      {
+        seatId: "artist",
+        name: "Artist",
+        controller: "agent" as const,
+        score: 90,
+        placement: 3,
+        successfulDrawings: 0,
+        correctGuesses: 0,
+        fastestSolveMs: null,
+        averageSolveMs: null,
+      },
+    ];
+    const freeForAll = snapshot({
+      mode: "free-for-all",
+      totalRounds: 3,
+      seats: snapshot().seats.map((seat) => ({
+        ...seat,
+        controller: seat.id === "opponent" ? "agent" as const : seat.controller,
+        score: leaderboard.find((standing) => standing.seatId === seat.id)?.score ?? 0,
+      })),
+      leaderboard,
+    });
+
+    expect(webMcpToolNames(freeForAll, "opponent")).toEqual([
+      "get_match_state",
+      "submit_guesses",
+    ]);
+    const state = compactWebMcpState(freeForAll, "opponent");
+    expect(state).toMatchObject({
+      mode: "free-for-all",
+      competitive: true,
+      scoring: "individual",
+      yourRole: "guesser",
+      yourScore: 180,
+      leaderboard,
+      nextAction: { tool: "submit_guesses" },
+    });
+    expect(state).not.toHaveProperty("yourTeam");
+    expect(state).not.toHaveProperty("activeTeam");
+    expect(state).not.toHaveProperty("scores");
+    expect(state.seats.every((seat) => !("team" in seat))).toBe(true);
+
+    const complete = compactWebMcpState({ ...freeForAll, phase: "match-end" }, "opponent");
+    expect(complete).toMatchObject({
+      mustContinue: false,
+      scoring: "individual",
+      outcome: {
+        kind: "individual_result",
+        competitive: true,
+        winners: [
+          { seatId: "guesser", name: "Guesser", score: 180 },
+          { seatId: "opponent", name: "Opponent", score: 180 },
+        ],
+        leaderboard,
+        instruction: expect.stringContaining("tied winners"),
+      },
+      nextAction: {
+        tool: null,
+        instruction: expect.stringContaining("individual winner or tied winners"),
+      },
+    });
+    expect(JSON.stringify(complete)).not.toContain("team_result");
+    expect(complete).not.toHaveProperty("yourTeam");
+    expect(complete).not.toHaveProperty("activeTeam");
+    expect(complete).not.toHaveProperty("scores");
+  });
+
+  it("reports Free-for-All artist and guesser awards without team framing", () => {
+    const freeForAllResult = compactWebMcpRoundResult(snapshot({
+      mode: "free-for-all",
+      totalRounds: 3,
+      phase: "round-end",
+      roundResult: {
+        roundIndex: 0,
+        prompt: "volcano",
+        artistSeatId: "artist",
+        team: "cobalt",
+        guessedBySeatId: "opponent",
+        pointsAwarded: 140,
+        artistPointsAwarded: 140,
+        guesserPointsAwarded: 140,
+        elapsedMs: 50_000,
+        strokeCount: 7,
+        toolCallCount: 7,
+      },
+      guesses: [{
+        id: "free-for-all-guess",
+        roundIndex: 0,
+        seatId: "opponent",
+        displayName: "Opponent",
+        guess: "volcano",
+        origin: "webmcp",
+        isCorrect: true,
+        createdAt: 1,
+      }],
+    }));
+
+    expect(freeForAllResult).toMatchObject({
+      round: 1,
+      prompt: "volcano",
+      outcome: "solved",
+      artist: "Artist",
+      guessedBy: "Opponent",
+      pointsPerPlayer: 140,
+      artistPointsAwarded: 140,
+      guesserPointsAwarded: 140,
+      competitive: true,
+      scoring: "individual",
+      instruction: expect.stringContaining("independently"),
+      guessTranscript: [{
+        player: "Opponent",
+        guess: "volcano",
+        provenance: "webmcp",
+        correct: true,
+      }],
+    });
+    expect(freeForAllResult).not.toHaveProperty("team");
+    expect(freeForAllResult).not.toHaveProperty("scores");
+    expect(JSON.stringify(freeForAllResult)).not.toContain("team_result");
+  });
+
+  it("supports the hosted Sketch Duet WebMCP lifecycle end to end", () => {
     const humanHost = {
       id: "human-host",
       name: "Human Host",
@@ -476,6 +637,7 @@ describe("dynamic WebMCP availability", () => {
       isHost: true,
       isReady: true,
       isConnected: true,
+      score: 0,
     };
     const agent = {
       id: "practice-agent",
@@ -485,6 +647,7 @@ describe("dynamic WebMCP availability", () => {
       isHost: false,
       isReady: true,
       isConnected: true,
+      score: 0,
     };
     const waiting = snapshot({
       mode: "practice",

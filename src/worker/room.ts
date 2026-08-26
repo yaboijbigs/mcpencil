@@ -3,6 +3,8 @@ import {
   ARENA_ROUND_OPTIONS,
   CommandEnvelopeSchema,
   CreateRoomRequestSchema,
+  FREE_FOR_ALL_MAX_PLAYERS,
+  FREE_FOR_ALL_MIN_PLAYERS,
   JoinRoomRequestSchema,
   PRACTICE_ROUND_OPTIONS,
   PrimitiveSchema,
@@ -24,6 +26,7 @@ import {
   type MatchAnalytics,
   type MatchPhase,
   type PrivatePrompt,
+  type PlayerStanding,
   type RoomCommand,
   type RoomMode,
   type RoomSnapshot,
@@ -45,9 +48,11 @@ import { randomPrompt } from "./prompts";
 
 type SqlRecord = Record<string, SqlStorageValue>;
 
+type StoredRoomMode = RoomMode | "exhibition";
+
 interface RoomRow extends SqlRecord {
   room_code: string;
-  mode: RoomMode;
+  mode: StoredRoomMode;
   phase: MatchPhase;
   revision: number;
   round_index: number;
@@ -445,7 +450,11 @@ export class GameRoom extends DurableObject<Env> {
     const roomCode = codeResult.data;
     const data = requestResult.data;
     const name = cleanPlayerText(data.name);
-    const totalRounds = data.mode === "practice" ? 2 : TEAM_ROUND_COUNT;
+    const totalRounds = data.mode === "practice"
+      ? 2
+      : data.mode === "free-for-all"
+        ? 1
+        : TEAM_ROUND_COUNT;
 
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
@@ -512,32 +521,39 @@ export class GameRoom extends DurableObject<Env> {
     // Re-read all mutable lobby state after the final await. No asynchronous work occurs
     // between these capacity decisions and the transaction, so concurrent joins serialize.
     const room = this.requireRoom();
+    const mode = publicRoomMode(room.mode);
     if (room.phase !== "lobby") {
       throw new ApiError(409, "MATCH_STARTED", "This match has already started.");
     }
     const seats = this.seatRows();
     let team: TeamId;
-    if (room.mode === "practice") {
+    if (mode === "practice") {
       if (seats.length >= 2) {
-        throw new ApiError(409, "PRACTICE_FULL", "This Practice Pair already has two players.");
+        throw new ApiError(409, "PRACTICE_FULL", "This Sketch Duet already has two players.");
       }
       const partner = seats[0];
       if (partner === undefined || partner.controller === result.data.controller) {
-        throw new ApiError(409, "PRACTICE_PARTNER_REQUIRED", "Practice Pair needs one human and one agent.");
+        throw new ApiError(409, "PRACTICE_PARTNER_REQUIRED", "Sketch Duet needs one human and one agent.");
       }
       if (result.data.team !== undefined && result.data.team !== "cobalt") {
-        throw new ApiError(409, "PRACTICE_TEAM", "Practice Pair uses the cobalt team.");
+        throw new ApiError(409, "PRACTICE_TEAM", "Sketch Duet uses one shared side.");
       }
       team = "cobalt";
     } else {
-      if (seats.length >= 8) throw new ApiError(409, "ROOM_FULL", "This room already has eight players.");
-      team = result.data.team ?? balancedTeam(seats);
-      if (seats.filter((seat) => seat.team === team).length >= 4) {
-        throw new ApiError(409, "TEAM_FULL", `Team ${team} already has four players.`);
+      if (seats.length >= FREE_FOR_ALL_MAX_PLAYERS) {
+        throw new ApiError(409, "ROOM_FULL", "This room already has eight players.");
+      }
+      if (mode === "free-for-all") {
+        team = "cobalt";
+      } else {
+        team = result.data.team ?? balancedTeam(seats);
+        if (seats.filter((seat) => seat.team === team).length >= 4) {
+          throw new ApiError(409, "TEAM_FULL", `Team ${team} already has four players.`);
+        }
       }
     }
     const position = seats.length;
-    const ready = room.mode === "practice" || result.data.controller === "agent";
+    const ready = mode === "practice" || result.data.controller === "agent";
 
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
@@ -555,11 +571,14 @@ export class GameRoom extends DurableObject<Env> {
         now,
       );
       this.ctx.storage.sql.exec("UPDATE room SET revision = revision + 1 WHERE id = 1");
+      if (mode === "free-for-all") {
+        this.ctx.storage.sql.exec("UPDATE room SET total_rounds = ? WHERE id = 1", seats.length + 1);
+      }
       this.insertActivitySync({
         roundIndex: -1,
         kind: "system",
         label: "player_joined",
-        detail: `${name} joined ${team}.`,
+        detail: mode === "free-for-all" ? `${name} joined the free-for-all.` : `${name} joined ${team}.`,
         seatId,
         origin: result.data.controller === "agent" ? "webmcp" : "human-ui",
         canvasVersion: room.canvas_version,
@@ -619,6 +638,12 @@ export class GameRoom extends DurableObject<Env> {
       endedAt: round.ended_at,
       guessedBySeatId: round.guessed_by_seat_id,
       pointsAwarded: round.points_awarded,
+      ...(publicRoomMode(room.mode) === "free-for-all"
+        ? {
+            artistPointsAwarded: round.points_awarded,
+            guesserPointsAwarded: round.points_awarded,
+          }
+        : {}),
     }));
     const highestCompletedRound = completedRounds.at(-1)?.roundIndex ?? -1;
     const canvas = this.rows<CanvasRow>(
@@ -631,11 +656,15 @@ export class GameRoom extends DurableObject<Env> {
     ).map(guessEventFromRow);
     return jsonResponse({
       roomCode: room.room_code,
+      mode: publicRoomMode(room.mode),
       revision: room.revision,
       rounds: completedRounds,
       canvas,
       guesses,
       analytics: this.analytics(),
+      ...(publicRoomMode(room.mode) === "free-for-all"
+        ? { leaderboard: this.individualLeaderboard() }
+        : {}),
     });
   }
 
@@ -662,6 +691,7 @@ export class GameRoom extends DurableObject<Env> {
   private async leaveRoom(request: Request): Promise<Response> {
     const seat = await this.authorizeRequest(request);
     const room = this.requireRoom();
+    const mode = publicRoomMode(room.mode);
     this.ctx.storage.transactionSync(() => {
       if (room.phase === "lobby") {
         this.ctx.storage.sql.exec("DELETE FROM rate_limits WHERE seat_id = ?", seat.id);
@@ -671,6 +701,10 @@ export class GameRoom extends DurableObject<Env> {
           if (successor !== undefined) {
             this.ctx.storage.sql.exec("UPDATE seats SET is_host = 1 WHERE id = ?", successor.id);
           }
+        }
+        if (mode === "free-for-all") {
+          const remainingSeats = this.scalar("SELECT COUNT(*) AS value FROM seats");
+          this.ctx.storage.sql.exec("UPDATE room SET total_rounds = ? WHERE id = 1", remainingSeats);
         }
       } else {
         this.ctx.storage.sql.exec("UPDATE seats SET is_connected = 0 WHERE id = ?", seat.id);
@@ -739,16 +773,30 @@ export class GameRoom extends DurableObject<Env> {
   ): CommandExecution {
     const room = this.requireRoom();
     this.requirePhase(room, "lobby");
-    if (room.mode === "practice" && team !== "cobalt") {
-      throw new ApiError(409, "PRACTICE_TEAM", "Practice Pair uses the cobalt team.");
+    const mode = publicRoomMode(room.mode);
+    if (mode === "practice" && team !== "cobalt") {
+      throw new ApiError(409, "PRACTICE_TEAM", "Sketch Duet uses one shared side.");
     }
-    if (team !== seat.team && this.seatRows().filter((candidate) => candidate.team === team).length >= 4) {
+    if (
+      mode === "practice"
+      && this.seatRows().some(
+        (candidate) => candidate.id !== seat.id && candidate.controller === controller,
+      )
+    ) {
+      throw new ApiError(
+        409,
+        "PRACTICE_PARTNER_REQUIRED",
+        "Sketch Duet needs one human and one agent.",
+      );
+    }
+    const configuredTeam: TeamId = mode === "free-for-all" ? "cobalt" : team;
+    if (mode === "arena" && team !== seat.team && this.seatRows().filter((candidate) => candidate.team === team).length >= 4) {
       throw new ApiError(409, "TEAM_FULL", `Team ${team} already has four players.`);
     }
     this.ctx.storage.transactionSync(() => {
       this.ctx.storage.sql.exec(
         "UPDATE seats SET team = ?, controller = ?, is_ready = ? WHERE id = ?",
-        team,
+        configuredTeam,
         controller,
         controller === "agent" ? 1 : 0,
         seat.id,
@@ -758,7 +806,9 @@ export class GameRoom extends DurableObject<Env> {
         roundIndex: -1,
         kind: "role-change",
         label: "seat_configured",
-        detail: `Seat set to ${team} ${controller}.`,
+        detail: mode === "free-for-all"
+          ? `Seat controller set to ${controller}.`
+          : `Seat set to ${configuredTeam} ${controller}.`,
         seatId: seat.id,
         origin: "human-ui",
         canvasVersion: room.canvas_version,
@@ -779,14 +829,15 @@ export class GameRoom extends DurableObject<Env> {
       throw new ApiError(403, "HOST_ONLY", "Only the host can configure the match.");
     }
     this.assertControllerOrigin(seat, command.origin);
-    const roundOptions: readonly number[] = room.mode === "practice"
+    const mode = publicRoomMode(room.mode);
+    const roundOptions: readonly number[] = mode === "practice"
       ? PRACTICE_ROUND_OPTIONS
       : ARENA_ROUND_OPTIONS;
-    if (!roundOptions.includes(command.totalRounds)) {
+    if (mode !== "free-for-all" && !roundOptions.includes(command.totalRounds)) {
       throw new ApiError(
         400,
         "INVALID_MATCH_SETTINGS",
-        `${room.mode === "practice" ? "Practice Pair" : "Arena"} supports ${roundOptions.join(", ")} rounds.`,
+        `${mode === "practice" ? "Sketch Duet" : "Team Match"} supports ${roundOptions.join(", ")} rounds.`,
       );
     }
     const durationOptions: readonly number[] = ROUND_DURATION_OPTIONS_MS;
@@ -799,14 +850,15 @@ export class GameRoom extends DurableObject<Env> {
     }
 
     this.ctx.storage.transactionSync(() => {
+      const totalRounds = mode === "free-for-all" ? this.seatRows().length : command.totalRounds;
       this.ctx.storage.sql.exec(
         `UPDATE room SET
            total_rounds = ?, round_duration_ms = ?, revision = revision + 1
          WHERE id = 1`,
-        command.totalRounds,
+        totalRounds,
         command.roundDurationMs,
       );
-      if (room.mode !== "practice") {
+      if (mode !== "practice") {
         this.ctx.storage.sql.exec(
           "UPDATE seats SET is_ready = CASE WHEN controller = 'agent' THEN 1 ELSE 0 END",
         );
@@ -815,7 +867,9 @@ export class GameRoom extends DurableObject<Env> {
         roundIndex: -1,
         kind: command.origin === "webmcp" ? "tool-call" : "human-action",
         label: "match_configured",
-        detail: `${command.totalRounds} rounds at ${command.roundDurationMs / 1_000} seconds each.`,
+        detail: mode === "free-for-all"
+          ? `${totalRounds} player turns at ${command.roundDurationMs / 1_000} seconds each.`
+          : `${totalRounds} rounds at ${command.roundDurationMs / 1_000} seconds each.`,
         seatId: seat.id,
         origin: command.origin,
         canvasVersion: room.canvas_version,
@@ -830,18 +884,33 @@ export class GameRoom extends DurableObject<Env> {
     this.requirePhase(room, "lobby");
     if (seat.is_host !== 1) throw new ApiError(403, "HOST_ONLY", "Only the host can start the match.");
     this.assertControllerOrigin(seat, origin);
+    const mode = publicRoomMode(room.mode);
     const seats = this.seatRows().filter((candidate) => candidate.is_connected === 1);
-    if (room.mode !== "practice") {
+    if (mode === "arena") {
       const cobaltCount = seats.filter((candidate) => candidate.team === "cobalt").length;
       const coralCount = seats.filter((candidate) => candidate.team === "coral").length;
       if (cobaltCount < 2 || coralCount < 2) {
-        throw new ApiError(409, "TEAMS_INCOMPLETE", "Arena teams need at least two players each.");
+        throw new ApiError(409, "TEAMS_INCOMPLETE", "Team Match needs at least two players on each team.");
+      }
+      if (seats.some((candidate) => candidate.is_ready !== 1)) {
+        throw new ApiError(409, "PLAYERS_NOT_READY", "Every player must ready up first.");
+      }
+    } else if (mode === "free-for-all") {
+      if (seats.length < FREE_FOR_ALL_MIN_PLAYERS || seats.length > FREE_FOR_ALL_MAX_PLAYERS) {
+        throw new ApiError(409, "PLAYERS_INCOMPLETE", "Free-for-All needs 3 to 8 connected players.");
       }
       if (seats.some((candidate) => candidate.is_ready !== 1)) {
         throw new ApiError(409, "PLAYERS_NOT_READY", "Every player must ready up first.");
       }
     }
     this.ctx.storage.transactionSync(() => {
+      if (mode === "free-for-all") {
+        this.ctx.storage.sql.exec(
+          "DELETE FROM rate_limits WHERE seat_id IN (SELECT id FROM seats WHERE is_connected = 0)",
+        );
+        this.ctx.storage.sql.exec("DELETE FROM seats WHERE is_connected = 0");
+        this.ctx.storage.sql.exec("UPDATE room SET total_rounds = ? WHERE id = 1", seats.length);
+      }
       this.insertActivitySync({
         roundIndex: -1,
         kind: origin === "webmcp" ? "tool-call" : "human-action",
@@ -1164,20 +1233,24 @@ export class GameRoom extends DurableObject<Env> {
 
   private beginRoundSync(previous: RoomRow, roundIndex: number, now: number): void {
     const seats = this.seatRows();
-    const activeTeam: TeamId = previous.mode === "practice" || roundIndex % 2 === 0 ? "cobalt" : "coral";
+    const mode = publicRoomMode(previous.mode);
+    const activeTeam: TeamId = mode !== "arena" || roundIndex % 2 === 0 ? "cobalt" : "coral";
     const teamSeats = seats.filter(
-      (seat) => seat.team === activeTeam && (previous.mode === "practice" || seat.is_connected === 1),
+      (seat) => mode === "free-for-all"
+        || (seat.team === activeTeam && (mode === "practice" || seat.is_connected === 1)),
     );
     if (teamSeats.length === 0) throw new ApiError(409, "NO_ARTIST", "The active team has no artist.");
     const artist =
-      previous.mode === "practice"
+      mode === "practice"
         ? teamSeats.find((candidate) => candidate.controller === (roundIndex % 2 === 0 ? "agent" : "human"))
-        : teamSeats[Math.floor(roundIndex / 2) % teamSeats.length];
+        : mode === "free-for-all"
+          ? teamSeats.slice().sort((left, right) => left.id.localeCompare(right.id))[roundIndex]
+          : teamSeats[Math.floor(roundIndex / 2) % teamSeats.length];
     if (artist === undefined) throw new ApiError(409, "NO_ARTIST", "The active team has no artist.");
     const usedPrompts = this.rows<SqlRecord & { prompt: string }>(
       "SELECT prompt FROM rounds ORDER BY round_index",
     ).map((round) => round.prompt);
-    const card = randomPrompt(usedPrompts, previous.mode === "practice");
+    const card = randomPrompt(usedPrompts, mode === "practice");
     const prepEndsAt = now + ROUND_PREP_DURATION_MS;
 
     this.ctx.storage.sql.exec(
@@ -1225,6 +1298,7 @@ export class GameRoom extends DurableObject<Env> {
     points: number,
   ): void {
     const round = this.requireRound(room.round_index);
+    const mode = publicRoomMode(room.mode);
     const strokeCount = this.scalar(
       "SELECT COUNT(*) AS value FROM canvas_events WHERE round_index = ? AND reverted = 0",
       room.round_index,
@@ -1240,6 +1314,9 @@ export class GameRoom extends DurableObject<Env> {
       team: round.team,
       ...(guessedBySeatId === null ? {} : { guessedBySeatId }),
       pointsAwarded: points,
+      ...(mode === "free-for-all"
+        ? { artistPointsAwarded: points, guesserPointsAwarded: points }
+        : {}),
       elapsedMs: Math.min(room.round_duration_ms, Math.max(0, now - round.started_at)),
       strokeCount,
       toolCallCount,
@@ -1256,17 +1333,27 @@ export class GameRoom extends DurableObject<Env> {
       toolCallCount,
       room.round_index,
     );
-    const scoreColumn = round.team === "cobalt" ? "score_cobalt" : "score_coral";
     const resultDeadline = now + ROUND_RESULT_MIN_MS;
-    this.ctx.storage.sql.exec(
-      `UPDATE room SET
-        phase = 'round-end', revision = revision + 1, ends_at = ?,
-        round_result_json = ?, ${scoreColumn} = ${scoreColumn} + ?
-       WHERE id = 1`,
-      resultDeadline,
-      JSON.stringify(result),
-      points,
-    );
+    if (mode === "free-for-all") {
+      this.ctx.storage.sql.exec(
+        `UPDATE room SET
+          phase = 'round-end', revision = revision + 1, ends_at = ?, round_result_json = ?
+         WHERE id = 1`,
+        resultDeadline,
+        JSON.stringify(result),
+      );
+    } else {
+      const scoreColumn = round.team === "cobalt" ? "score_cobalt" : "score_coral";
+      this.ctx.storage.sql.exec(
+        `UPDATE room SET
+          phase = 'round-end', revision = revision + 1, ends_at = ?,
+          round_result_json = ?, ${scoreColumn} = ${scoreColumn} + ?
+         WHERE id = 1`,
+        resultDeadline,
+        JSON.stringify(result),
+        points,
+      );
+    }
     this.ctx.storage.sql.exec("UPDATE seats SET is_ready = 0");
     this.insertActivitySync({
       roundIndex: room.round_index,
@@ -1336,7 +1423,7 @@ export class GameRoom extends DurableObject<Env> {
             roundIndex: room.round_index,
             kind: "system",
             label: "human_prompt_held",
-            detail: "Practice waits for the human artist's first stroke.",
+            detail: "Sketch Duet waits for the human artist's first stroke.",
             seatId: artist.id,
             canvasVersion: room.canvas_version,
             now,
@@ -1408,9 +1495,17 @@ export class GameRoom extends DurableObject<Env> {
 
   private assertGuessingOrigin(room: RoomRow, seat: SeatRow, origin: ActionOrigin): void {
     this.requirePhase(room, "drawing");
-    if (room.mode === "practice") {
+    const mode = publicRoomMode(room.mode);
+    if (mode === "free-for-all") {
+      if (seat.id === room.artist_seat_id) {
+        throw new ApiError(403, "NOT_GUESSER", "The active artist cannot guess their own drawing.");
+      }
+      this.assertControllerOrigin(seat, origin);
+      return;
+    }
+    if (mode === "practice") {
       if (seat.team !== room.active_team || seat.id === room.artist_seat_id) {
-        throw new ApiError(403, "NOT_GUESSER", "Only the practice partner may guess.");
+        throw new ApiError(403, "NOT_GUESSER", "Only the Sketch Duet partner may guess.");
       }
       this.assertControllerOrigin(seat, origin);
       return;
@@ -1503,6 +1598,9 @@ export class GameRoom extends DurableObject<Env> {
 
   private publicSnapshot(): RoomSnapshot {
     const room = this.requireRoom();
+    const mode = publicRoomMode(room.mode);
+    const leaderboard = mode === "free-for-all" ? this.individualLeaderboard() : undefined;
+    const scoreBySeatId = new Map(leaderboard?.map((standing) => [standing.seatId, standing.score]) ?? []);
     const connectedSeatIds = new Set<string>();
     for (const socket of this.ctx.getWebSockets()) {
       const attachment = this.socketAttachment(socket);
@@ -1516,6 +1614,7 @@ export class GameRoom extends DurableObject<Env> {
       isHost: seat.is_host === 1,
       isReady: seat.is_ready === 1,
       isConnected: connectedSeatIds.has(seat.id),
+      score: scoreBySeatId.get(seat.id) ?? 0,
     }));
     const roundIndex = Math.max(0, room.round_index);
     const canvas =
@@ -1541,7 +1640,7 @@ export class GameRoom extends DurableObject<Env> {
       .map(activityEventFromRow);
     return {
       roomCode: room.room_code,
-      mode: room.mode,
+      mode,
       phase: room.phase,
       revision: room.revision,
       roundIndex,
@@ -1552,6 +1651,7 @@ export class GameRoom extends DurableObject<Env> {
       endsAt: room.ends_at,
       canvasVersion: room.canvas_version,
       scores: { cobalt: room.score_cobalt, coral: room.score_coral },
+      ...(leaderboard === undefined ? {} : { leaderboard }),
       seats,
       canvas,
       guesses,
@@ -1585,6 +1685,66 @@ export class GameRoom extends DurableObject<Env> {
       averageGuessMs: averageGuess === null || averageGuess === undefined ? null : Math.round(Number(averageGuess)),
       byOrigin,
     };
+  }
+
+  private individualLeaderboard(): PlayerStanding[] {
+    const stats = new Map<string, {
+      seat: SeatRow;
+      score: number;
+      successfulDrawings: number;
+      correctGuesses: number;
+      solveTimes: number[];
+    }>();
+    for (const seat of this.seatRows()) {
+      stats.set(seat.id, {
+        seat,
+        score: 0,
+        successfulDrawings: 0,
+        correctGuesses: 0,
+        solveTimes: [],
+      });
+    }
+    const rounds = this.rows<RoundRow>(
+      "SELECT * FROM rounds WHERE ended_at IS NOT NULL ORDER BY round_index",
+    );
+    for (const round of rounds) {
+      if (round.guessed_by_seat_id === null || round.points_awarded <= 0 || round.ended_at === null) continue;
+      const artist = stats.get(round.artist_seat_id);
+      if (artist !== undefined) {
+        artist.score += round.points_awarded;
+        artist.successfulDrawings += 1;
+      }
+      const guesser = stats.get(round.guessed_by_seat_id);
+      if (guesser !== undefined) {
+        guesser.score += round.points_awarded;
+        guesser.correctGuesses += 1;
+        guesser.solveTimes.push(Math.max(0, round.ended_at - round.started_at));
+      }
+    }
+
+    const ordered = [...stats.values()].sort((left, right) =>
+      right.score - left.score
+      || left.seat.name.localeCompare(right.seat.name)
+      || left.seat.id.localeCompare(right.seat.id),
+    );
+    let previousScore: number | null = null;
+    let placement = 0;
+    return ordered.map((entry, index) => {
+      if (entry.score !== previousScore) placement = index + 1;
+      previousScore = entry.score;
+      const solveTotal = entry.solveTimes.reduce((total, value) => total + value, 0);
+      return {
+        seatId: entry.seat.id,
+        name: entry.seat.name,
+        controller: entry.seat.controller,
+        score: entry.score,
+        placement,
+        successfulDrawings: entry.successfulDrawings,
+        correctGuesses: entry.correctGuesses,
+        fastestSolveMs: entry.solveTimes.length === 0 ? null : Math.min(...entry.solveTimes),
+        averageSolveMs: entry.solveTimes.length === 0 ? null : Math.round(solveTotal / entry.solveTimes.length),
+      };
+    });
   }
 
   private insertActivitySync(input: {
@@ -1739,6 +1899,10 @@ function balancedTeam(seats: readonly SeatRow[]): TeamId {
   const cobalt = seats.filter((seat) => seat.team === "cobalt").length;
   const coral = seats.filter((seat) => seat.team === "coral").length;
   return cobalt <= coral ? "cobalt" : "coral";
+}
+
+function publicRoomMode(mode: StoredRoomMode): RoomMode {
+  return mode === "exhibition" ? "arena" : mode;
 }
 
 function remainingMs(room: RoomRow, now: number): number | null {

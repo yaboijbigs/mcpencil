@@ -30,7 +30,7 @@ flowchart LR
     D -->|untrusted display data| B
 ```
 
-The stable client descriptor registry is discoverability, not authorization. The client maintains a separate exact actionable set, and all role, phase, team, time, token, rate, and version checks are repeated inside the authoritative room.
+The stable client descriptor registry is discoverability, not authorization. The client maintains a separate exact actionable set, and all mode, roster, role, phase, time, token, rate, and version checks are repeated inside the authoritative room.
 
 ## Threats and controls
 
@@ -65,14 +65,14 @@ Controls:
 
 Residual risks: intermediary access logging can capture a WebSocket request URL, and a malicious script or extension with access to browser storage can act as that seat. Before a higher-risk public deployment, replace the query credential with a short-lived, single-purpose socket ticket and verify edge-log redaction. Account-based recovery is deliberately outside the anonymous-game scope.
 
-### Practice invitation capture
+### Sketch Duet invitation capture
 
-Threats include enumerating or forwarding a five-character room code and claiming the complementary Practice seat before the intended agent joins.
+Threats include enumerating or forwarding a five-character room code and claiming the complementary Sketch Duet seat before the intended agent joins.
 
 Controls and limits:
 
 - the code locates an invite-only room but grants no authority over an existing seat;
-- Practice admits at most two seats and requires one declared human controller and one declared agent controller;
+- Sketch Duet admits exactly two seats and requires one declared human controller and one declared agent controller;
 - every joined seat receives a distinct high-entropy credential, and subsequent actions require that credential;
 - this release does not sign the invitation or authenticate which agent should claim the open seat.
 
@@ -119,11 +119,12 @@ Controls:
 
 ### Guess abuse and answer probing
 
-Threats include high-rate dictionary guesses, non-teammate guesses, an artist self-guess, and alias/typo matching used as an oracle.
+Threats include high-rate dictionary guesses, a mode-ineligible guess, an artist self-guess, concurrent correct guesses, and alias/typo matching used as an oracle.
 
 Controls:
 
-- only connected active-team non-artists may submit;
+- the room derives eligibility from the persisted mode and roster: the duet partner, active-team non-artists in Team Match, or every non-artist starting player in Free-for-All;
+- the Durable Object serializes simultaneous guesses, so only the first accepted correct guess ends the round and receives solver credit; Free-for-All credits the artist in the same authoritative mutation;
 - per-seat monotonic rate limits bound attempts;
 - rejected guesses reveal no distance or alias detail;
 - comparisons are server-side against curated per-card aliases;

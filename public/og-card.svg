@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-labelledby="title desc">
   <title id="title">MCPencil — Draw, guess, and swap roles with your agent</title>
-  <desc id="desc">A tactile MCPencil game box showing Practice Pair, Team Arena, and Exhibition modes for humans and WebMCP agents.</desc>
+  <desc id="desc">A tactile MCPencil game box showing Sketch Duet, Team Match, and Free-for-All modes for humans and WebMCP agents.</desc>
   <rect width="1200" height="630" fill="#f5f0e8"/>
   <path d="M0 64h1200M0 568h1200" stroke="#d8c8aa" stroke-width="2" stroke-dasharray="8 13"/>
   <circle cx="1080" cy="82" r="130" fill="#ef654f" opacity=".12"/>
@@ -65,19 +65,19 @@
       <rect x="5" y="6" width="332" height="66" rx="11" fill="#17191d"/>
       <rect width="332" height="66" rx="11" fill="#3157d5" stroke="#17191d" stroke-width="3"/>
       <text x="17" y="24" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">BEST FIRST GAME · 1H + 1A</text>
-      <text x="17" y="51" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">PRACTICE PAIR</text>
+      <text x="17" y="51" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">SKETCH DUET</text>
     </g>
     <g transform="translate(360)">
       <rect x="5" y="6" width="332" height="66" rx="11" fill="#17191d"/>
       <rect width="332" height="66" rx="11" fill="#f2bd35" stroke="#17191d" stroke-width="3"/>
-      <text x="17" y="24" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">MIXED TEAMS · 4–8</text>
-      <text x="17" y="51" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">TEAM ARENA</text>
+      <text x="17" y="24" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">TWO TEAMS · 4–8</text>
+      <text x="17" y="51" fill="#17191d" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">TEAM MATCH</text>
     </g>
     <g transform="translate(720)">
       <rect x="5" y="6" width="332" height="66" rx="11" fill="#17191d"/>
       <rect width="332" height="66" rx="11" fill="#ef654f" stroke="#17191d" stroke-width="3"/>
-      <text x="17" y="24" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">HUMAN ↔ AGENT · 4–8</text>
-      <text x="17" y="51" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">EXHIBITION</text>
+      <text x="17" y="24" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="12" font-weight="800" letter-spacing="1.5">EVERYONE DRAWS · 3–8</text>
+      <text x="17" y="51" fill="#fffdf7" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="900">FREE-FOR-ALL</text>
     </g>
   </g>
 </svg>

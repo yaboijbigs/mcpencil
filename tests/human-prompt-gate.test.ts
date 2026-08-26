@@ -24,6 +24,7 @@ function artistSnapshot(mode: RoomMode): RoomSnapshot {
       isHost: true,
       isReady: true,
       isConnected: true,
+      score: 0,
     }],
     canvas: [],
     guesses: [],
@@ -40,7 +41,7 @@ function artistSnapshot(mode: RoomMode): RoomSnapshot {
 }
 
 describe("human prompt visibility gate", () => {
-  it.each(["practice", "arena", "exhibition"] as const)(
+  it.each(["practice", "arena", "free-for-all"] as const)(
     "requires the prompt to be hidden before a human artist starts in %s",
     (mode) => {
       const key = currentHumanPromptKey(artistSnapshot(mode), "human-seat", "human");

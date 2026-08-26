@@ -1,4 +1,4 @@
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from "react";
 import type {
   ControllerType,
   RoomMode,
@@ -50,7 +50,18 @@ export function LandingExperience({
   const [joinName, setJoinName] = useState("");
   const [roomCode, setRoomCode] = useState(roomFromUrl);
   const [joinController, setJoinController] = useState<ControllerType>("human");
+  const joinSectionRef = useRef<HTMLElement>(null);
+  const joinNameRef = useRef<HTMLInputElement>(null);
   const mode = getModeDefinition(selectedMode);
+
+  useEffect(() => {
+    if (!hasValidRoomInvite || isAgentInvite) return;
+    const frame = window.requestAnimationFrame(() => {
+      joinSectionRef.current?.scrollIntoView({ block: "start", behavior: "auto" });
+      joinNameRef.current?.focus({ preventScroll: true });
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [hasValidRoomInvite, isAgentInvite]);
 
   const submitCreate = async (event: FormEvent) => {
     event.preventDefault();
@@ -100,7 +111,7 @@ export function LandingExperience({
               href="#create-game"
               onClick={() => setSelectedMode("practice")}
             >
-              Start Practice Pair <ArrowIcon />
+              Start Sketch Duet <ArrowIcon />
             </a>
             <a className="text-link" href="#game-modes">Compare all three modes</a>
           </div>
@@ -143,7 +154,7 @@ export function LandingExperience({
                 <dl className="mode-facts">
                   <div><dt>Players</dt><dd>{definition.players}<small>{definition.playerBreakdown}</small></dd></div>
                   <div><dt>Style</dt><dd>{definition.competition}<small>{definition.format}</small></dd></div>
-                  <div><dt>Rounds</dt><dd>{definition.rounds.join(", ")}<small>{definition.setup}</small></dd></div>
+                  <div><dt>Rounds</dt><dd>{definition.roundsLabel}<small>{definition.setup}</small></dd></div>
                 </dl>
                 <span className="mode-loop" aria-label={`${definition.name} role loop`}>
                   <span>{definition.roleLoop[0]}</span>
@@ -168,7 +179,9 @@ export function LandingExperience({
         <div className="create-game-summary">
           <span className="eyebrow">Set up {mode.name}</span>
           <h2 id="create-game-title">{mode.tagline}</h2>
-          <p>{mode.goal}. Choose the exact round count and drawing clock with everyone in the lobby.</p>
+          <p>{mode.goal}. {selectedMode === "free-for-all"
+            ? "The roster sets one round per player; choose the drawing clock in the lobby."
+            : "Choose the exact round count and drawing clock with everyone in the lobby."}</p>
           <div className="selected-mode-loop">
             <span>{mode.roleLoop[0]}</span><ArrowIcon /><span>{mode.roleLoop[1]}</span>
           </div>
@@ -203,17 +216,17 @@ export function LandingExperience({
         </form>
       </section>
 
-      <section className={`join-section ${hasValidRoomInvite ? "has-room-invite" : ""}`} id="join-room" aria-labelledby="join-room-title">
+      <section ref={joinSectionRef} className={`join-section ${hasValidRoomInvite ? "has-room-invite" : ""}`} id="join-room" aria-labelledby="join-room-title">
         <div className="join-section-copy">
           <span className="eyebrow">Already have a code?</span>
           <h2 id="join-room-title">Join a room.</h2>
-          <p>{hasValidRoomInvite ? `Room ${roomFromUrl} is waiting for you.` : "Use the five-character code from any Practice, Arena, or Exhibition host."}</p>
+          <p>{hasValidRoomInvite ? `Room ${roomFromUrl} is waiting for you.` : "Use the five-character code from any Sketch Duet, Team Match, or Free-for-All host."}</p>
         </div>
         <form className="join-form" onSubmit={(event) => void submitJoin(event)}>
           <label className="field">
             <span>Your display name</span>
             <input
-              autoFocus={hasValidRoomInvite}
+              ref={joinNameRef}
               maxLength={24}
               required
               value={joinName}
@@ -353,21 +366,29 @@ function ModeDoodle({ mode }: { mode: RoomMode }) {
   if (mode === "arena") {
     return (
       <svg className="mode-doodle" viewBox="0 0 240 112" aria-hidden="true">
-        <path d="M120 14v84M106 28h28M106 84h28" />
-        <circle cx="46" cy="35" r="15" /><circle cx="82" cy="76" r="15" />
-        <circle cx="194" cy="35" r="15" /><circle cx="158" cy="76" r="15" />
-        <path d="M28 66c3-13 9-19 18-19s15 6 18 19M64 107c3-13 9-19 18-19s15 6 18 19" />
-        <rect x="176" y="48" width="36" height="29" rx="8" /><path d="M194 40v8m-7-8h14" />
-        <rect x="140" y="88" width="36" height="19" rx="8" />
+        <g className="doodle-team-cobalt">
+          <circle cx="38" cy="36" r="14" /><circle cx="70" cy="71" r="14" />
+          <path d="M20 64c3-11 9-16 18-16s15 5 18 16M52 99c3-11 9-16 18-16s15 5 18 16" />
+        </g>
+        <g className="doodle-team-coral">
+          <circle cx="202" cy="36" r="14" /><circle cx="170" cy="71" r="14" />
+          <path d="M184 64c3-11 9-16 18-16s15 5 18 16M152 99c3-11 9-16 18-16s15 5 18 16" />
+        </g>
+        <rect x="99" y="24" width="42" height="58" rx="7" />
+        <path d="M120 24v58M106 40h7m14 0h7M108 65h24M92 94h56" />
       </svg>
     );
   }
   return (
     <svg className="mode-doodle" viewBox="0 0 240 112" aria-hidden="true">
-      <path d="m120 9 15 28 31 5-22 22 5 31-29-14-29 14 5-31-22-22 31-5 15-28Z" />
-      <path d="M20 92h200M34 92l18-45m154 45-18-45M54 47h132" />
-      <circle cx="77" cy="68" r="13" /><path d="M58 96c3-11 9-16 19-16s16 5 19 16" />
-      <rect x="148" y="55" width="30" height="27" rx="7" /><path d="M163 48v7m-6-7h12m-14 20h.1m16 0h.1" />
+      <rect x="82" y="18" width="76" height="53" rx="7" />
+      <path d="M94 57c10-20 21-26 32-18 8 6 14 3 21-9M105 18l7-8m16 8 8-8" />
+      <circle cx="38" cy="31" r="12" /><circle cx="202" cy="31" r="12" />
+      <circle cx="48" cy="82" r="12" /><circle cx="192" cy="82" r="12" />
+      <path d="M22 55c3-9 8-13 16-13s13 4 16 13M186 55c3-9 8-13 16-13s13 4 16 13" />
+      <path d="M32 106c3-9 8-13 16-13s13 4 16 13M176 106c3-9 8-13 16-13s13 4 16 13" />
+      <path d="M91 105h58V88h-18V76h-22v18H91v11Z" />
+      <path d="M120 81v15m-19 2h9m20 0h9" />
     </svg>
   );
 }

@@ -7,7 +7,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 ## Pre-recording setup
 
 - Deploy the exact tagged release to `https://mcpencil.com`.
-- Use a seeded Practice Pair whose prompts have been rehearsed but are not named in narration.
+- Use a seeded Sketch Duet whose prompts have been rehearsed but are not named in narration.
 - Open the app in ChatGPT's in-app browser with GPT-5.6 Sol or Terra.
 - Pre-size the WebMCP Lens so tool names and results are readable at video resolution.
 - Open a second human browser only if the practiced flow needs it; hide unrelated tabs.
@@ -27,13 +27,13 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 0:10–0:25 — the thesis
 
-**Picture:** Landing page. Cursor highlights Practice Pair, mixed human/agent seats, and the WebMCP-ready indicator.
+**Picture:** Landing page. Cursor highlights Sketch Duet, its human-plus-agent pairing, and the WebMCP-ready indicator.
 
 **Narration:** “Most AI games bring their bot to you. MCPencil lets people bring the browser agent they already use. Humans and agents join the same realtime room, take the same roles, and use one authoritative game engine.”
 
 ### 0:25–0:40 — agent joins and artist actions unlock
 
-**Picture:** The human clicks **Practice Pair**, chooses **Invite an AI player**, and pastes the generated invitation into a fresh no-context agent chat. The agent uses its WebMCP-capable browser surface to navigate, the dedicated handoff page appears, and it calls the page-exposed `play_mcpencil({})` tool. The waiting lobby starts only after the agent connects; expand the Lens as artist actions become available.
+**Picture:** The human clicks **Sketch Duet**, chooses **Invite an AI player**, and pastes the generated invitation into a fresh no-context agent chat. The agent uses its WebMCP-capable browser surface to navigate, the dedicated handoff page appears, and it calls the page-exposed `play_mcpencil({})` tool. The match starts automatically only after both isolated sockets connect; expand the Lens as artist actions become available.
 
 **Narration:** “The agent joins through WebMCP. One stable tool registry lasts for the page, while role and phase atomically control which actions are legal now—so long matches stay compatible without weakening authorization.”
 
@@ -59,11 +59,11 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 **Narration:** “I draw with pointer controls. The agent sees the rendered picture in its isolated browser view. A tiny canvas-only text rendering keeps text-first clients fast, then it submits a normal, rate-limited guess through WebMCP. The prompt and its aliases never enter guesser state. There is no hosted model, API key, bot OAuth, or DOM automation inside MCPencil.”
 
-### 1:45–2:03 — mixed-team arena and Lens
+### 1:45–2:03 — Free-for-All leaderboard and Lens
 
-**Picture:** Fast cut to a prepared Team Arena lobby and active mixed teams. Show controller icons plus non-color team patterns, artist rotation, and a live spectator view. Pan the Lens across declared human and WebMCP origin entries.
+**Picture:** Fast cut to a prepared Free-for-All with mixed human and agent seats. Show the frozen artist order, everyone-but-the-artist guessing, and the individual leaderboard updating when the first solver succeeds. Pan the Lens across declared human and WebMCP origin entries.
 
-**Narration:** “Practice proves the loop; Team Arena scales it to mixed teams, humans versus agents, or even agent versus agent. The Lens makes invisible integration quality judgeable without exposing model reasoning.”
+**Narration:** “Sketch Duet proves the bidirectional loop. In Free-for-All, every player draws once, everyone else races to solve it, and both the artist and first solver score. The same ten WebMCP tools work across every mode, while the Lens makes their authorization judgeable without exposing model reasoning.”
 
 ### 2:03–2:17 — replay and analytics
 

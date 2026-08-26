@@ -84,22 +84,31 @@ export function compactWebMcpState(
   const role = isArtist(snapshot, seatId) ? "artist" : canGuess(snapshot, seatId) ? "guesser" : "spectator";
   const action = compactNextAction(snapshot, seatId);
   const competitive = snapshot.mode !== "practice";
+  const scoring = snapshot.mode === "practice"
+    ? "cooperative"
+    : snapshot.mode === "free-for-all"
+      ? "individual"
+      : "team";
   const completedRounds = snapshot.phase === "lobby"
     ? 0
     : snapshot.phase === "match-end" || snapshot.phase === "round-end"
       ? snapshot.roundIndex + 1
       : snapshot.roundIndex;
-  const seats = snapshot.seats.map(({ id, name, team, controller, isReady, isConnected }) => ({
+  const seats = snapshot.seats.map(({ id, name, team, controller, isReady, isConnected, score }) => ({
     id,
     name,
-    ...(competitive ? { team } : {}),
+    ...(scoring === "team" ? { team } : {}),
+    ...(scoring === "individual" ? { score } : {}),
     controller,
     isReady,
     isConnected,
   }));
+  const leaderboard = snapshot.mode === "free-for-all"
+    ? snapshot.leaderboard ?? compactFallbackLeaderboard(snapshot)
+    : null;
   const outcome = snapshot.phase !== "match-end"
     ? null
-    : competitive
+    : scoring === "team"
       ? {
           kind: "team_result" as const,
           competitive: true,
@@ -108,26 +117,38 @@ export function compactWebMcpState(
             : snapshot.scores.cobalt > snapshot.scores.coral ? "cobalt" : "coral",
           scores: snapshot.scores,
         }
-      : {
+      : scoring === "individual"
+        ? {
+            kind: "individual_result" as const,
+            competitive: true,
+            winners: leaderboard?.filter((standing) => standing.placement === 1)
+              .map(({ seatId: winnerSeatId, name, score }) => ({ seatId: winnerSeatId, name, score })) ?? [],
+            leaderboard,
+            instruction: "Free-for-All is complete. Report the individual winner or tied winners and final leaderboard; do not report a team score.",
+          }
+        : {
           kind: "practice_complete" as const,
           competitive: false,
           winner: null,
           roundsPlayed: snapshot.totalRounds,
           solvedRounds: snapshot.analytics.correctGuesses,
-          instruction: "Practice Pair is collaborative. Report the completed rounds and prompts; do not declare a team winner or final team score.",
+          instruction: "Sketch Duet is collaborative. Report the completed rounds and prompts; do not declare a team winner or final team score.",
         };
   const baseState = {
     intent: PLAY_INTENT,
     mustContinue: snapshot.phase !== "match-end",
     completionCondition: COMPLETION_CONDITION,
     competitive,
+    scoring,
     roomCode: snapshot.roomCode, mode: snapshot.mode, phase: snapshot.phase, round: snapshot.roundIndex + 1,
     totalRounds: snapshot.totalRounds, revision: snapshot.revision, yourSeatId: seatId,
     yourRole: role,
     matchSettings: { totalRounds: snapshot.totalRounds, roundDurationMs: snapshot.roundDurationMs },
-    ...(competitive
+    ...(scoring === "team"
       ? { yourTeam: seat?.team, activeTeam: snapshot.activeTeam, scores: snapshot.scores }
-      : {
+      : scoring === "individual"
+        ? { yourScore: seat?.score ?? 0, leaderboard }
+        : {
           practiceProgress: {
             completedRounds,
             solvedRounds: snapshot.analytics.correctGuesses,
@@ -177,8 +198,10 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
         tool: null,
         arguments: {},
         instruction: snapshot.mode === "practice"
-          ? "Practice Pair is complete. Report the collaborative rounds and prompts; do not name a winning team or final team score."
-          : "The team match has ended. Report the winning team and final score to the user.",
+          ? "Sketch Duet is complete. Report the collaborative rounds and prompts; do not name a winning team or final team score."
+          : snapshot.mode === "free-for-all"
+            ? "Free-for-All is complete. Report the individual winner or tied winners and final leaderboard; do not report a team score."
+            : "The Team Match has ended. Report the winning team and final score to the user.",
       },
       urgency: "complete",
     };
@@ -209,14 +232,20 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
         nextAction: {
           tool: "get_match_state",
           arguments: { afterRevision: snapshot.revision, waitMs: 25_000 },
-          instruction: "The host starts Practice Pair automatically after both seats join.",
+          instruction: "Sketch Duet starts automatically after both seats join.",
         },
         urgency: "wait",
       };
     }
     if (seat.isHost) {
       return {
-        nextAction: { tool: "start_match", arguments: {}, instruction: "Start as soon as both teams have two ready players." },
+        nextAction: {
+          tool: "start_match",
+          arguments: {},
+          instruction: snapshot.mode === "free-for-all"
+            ? "Start as soon as 3 to 8 players are connected and ready. The server makes one round per starting player."
+            : "Start as soon as both teams have two ready players.",
+        },
         urgency: "when-ready",
       };
     }
@@ -266,7 +295,28 @@ export function compactWebMcpRoundResult(snapshot: RoomSnapshot) {
       provenance: origin,
       correct: isCorrect,
     }));
-  if (snapshot.mode !== "practice") return { ...result, guessTranscript };
+  if (snapshot.mode === "arena") return { ...result, guessTranscript };
+  if (snapshot.mode === "free-for-all") {
+    return {
+      round: result.roundIndex + 1,
+      prompt: result.prompt,
+      outcome: result.guessedBySeatId === undefined ? "timed_out" : "solved",
+      artist: snapshot.seats.find((seat) => seat.id === result.artistSeatId)?.name ?? result.artistSeatId,
+      guessedBy: result.guessedBySeatId === undefined
+        ? null
+        : snapshot.seats.find((seat) => seat.id === result.guessedBySeatId)?.name ?? result.guessedBySeatId,
+      pointsPerPlayer: result.pointsAwarded,
+      artistPointsAwarded: result.artistPointsAwarded ?? result.pointsAwarded,
+      guesserPointsAwarded: result.guesserPointsAwarded ?? result.pointsAwarded,
+      elapsedMs: result.elapsedMs,
+      strokeCount: result.strokeCount,
+      toolCallCount: result.toolCallCount,
+      guessTranscript,
+      competitive: true,
+      scoring: "individual",
+      instruction: "The artist and first correct guesser earn the listed points independently; do not describe this as a team result.",
+    };
+  }
   return {
     round: result.roundIndex + 1,
     prompt: result.prompt,
@@ -280,7 +330,7 @@ export function compactWebMcpRoundResult(snapshot: RoomSnapshot) {
     toolCallCount: result.toolCallCount,
     guessTranscript,
     competitive: false,
-    instruction: "This was a collaborative Practice Pair round; do not describe its team or points as a competitive score.",
+    instruction: "This was a collaborative Sketch Duet round; do not describe its team or points as a competitive score.",
   };
 }
 
@@ -311,6 +361,25 @@ function compactPrimitive(primitive: VectorPrimitive): VectorPrimitive {
     case "polygon":
       return { type: "polygon", points: samplePoints(primitive.points), ...style };
   }
+}
+
+function compactFallbackLeaderboard(snapshot: RoomSnapshot) {
+  let previousScore: number | null = null;
+  let placement = 0;
+  return snapshot.seats
+    .slice()
+    .sort((left, right) => right.score - left.score || left.name.localeCompare(right.name))
+    .map((candidate, index) => {
+      if (candidate.score !== previousScore) placement = index + 1;
+      previousScore = candidate.score;
+      return {
+        seatId: candidate.id,
+        name: candidate.name,
+        controller: candidate.controller,
+        score: candidate.score,
+        placement,
+      };
+    });
 }
 
 function samplePoints(points: Array<{ x: number; y: number }>) {

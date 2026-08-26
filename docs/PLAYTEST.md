@@ -19,7 +19,7 @@ The gate must cover:
 - SQLite state recovery after Durable Object eviction;
 - round alarms and post-expiry mutation rejection;
 - one-primitive WebMCP enforcement, idempotent drawing calls, and stale canvas versions;
-- lobby eligibility, team alternation, artist rotation, scoring, and match completion;
+- lobby eligibility, mode-specific artist order, team and individual scoring, ties, and match completion;
 - private prompt absence from every shared pre-reveal payload;
 - human UI/WebMCP command parity;
 - WebSocket disconnect, reconnect, and version catch-up;
@@ -39,7 +39,7 @@ Record the release commit and result:
 
 That table is retained as the prior production diagnostic. The August 26 release candidate subsequently passed generated Cloudflare types, `tsc -b`, all **95/95 tests across 13 files**, `git diff --check`, and the Vite production build. On the process-heavy Windows development host, the identical Vitest suite was run with `--maxWorkers=1 --no-file-parallelism` after a parallel pool attempt exhausted worker-start capacity; no tests were skipped. The immutable Git SHA and Cloudflare Worker version belong in the public release/deployment record because a commit cannot contain its own final hash or the deployment identifier created from it.
 
-The isolated visual-guesser release was deployed from public source commit `a9956d525b2d61e93f8091aa44f011f132025c26` on August 26, 2026. Generated Cloudflare types, `tsc -b`, **113/113 tests across 17 files**, `git diff --check`, and the Vite production build passed; no tests were skipped. Cloudflare Worker version `da2cf951-0ca1-442f-b03c-1d2c620b97c6` serves `mcpencil.com`, `www.mcpencil.com`, `agent.mcpencil.com`, and the recorded `workers.dev` URL. A live smoke test confirmed 200 responses with CSP and `Permissions-Policy: tools=(self)` on both human and agent origins. A temporary Practice room created on the human origin admitted one human and one agent through the agent origin into the same Durable Object, then both test seats left successfully. This verifies routing, TLS, same-origin API policy, and cross-origin room coordination; it is not a substitute for the pending zero-context browser-agent rehearsals below.
+The isolated visual-guesser release was deployed from public source commit `a9956d525b2d61e93f8091aa44f011f132025c26` on August 26, 2026. Generated Cloudflare types, `tsc -b`, **113/113 tests across 17 files**, `git diff --check`, and the Vite production build passed; no tests were skipped. Cloudflare Worker version `da2cf951-0ca1-442f-b03c-1d2c620b97c6` serves `mcpencil.com`, `www.mcpencil.com`, `agent.mcpencil.com`, and the recorded `workers.dev` URL. A live smoke test confirmed 200 responses with CSP and `Permissions-Policy: tools=(self)` on both human and agent origins. A temporary two-seat room—then presented under the former **Practice Pair** label—was created on the human origin and admitted one human and one agent through the agent origin into the same Durable Object; both test seats then left successfully. This verifies routing, TLS, same-origin API policy, and cross-origin room coordination in that historical build. It does not verify the later mode overhaul or replace the pending zero-context browser-agent rehearsals below.
 
 ## Recorded production diagnostics
 
@@ -51,9 +51,9 @@ The following observations were made against `https://mcpencil.com` on August 25
 | Inactive artist action gate | Passed | An attempted draw while inactive was rejected by the client action gate before a room mutation. |
 | Live stroke settlement | Passed | A production long-line stroke entered its reveal animation, then settled after about 900 ms with no reveal class/dash styling and with both exact canonical endpoints present. |
 | Isolated agent origin | Passed | `agent.mcpencil.com` served the agent route with the expected CSP and WebMCP Permissions Policy. |
-| Cross-origin Practice admission | Passed | A human-origin room admitted an agent-origin seat into the same room as distinct `human`/`agent` controllers; both temporary seats were cleaned up. |
+| Cross-origin two-seat admission | Passed | Under the former Practice Pair label, a human-origin room admitted an agent-origin seat into the same room as distinct `human`/`agent` controllers; both temporary seats were cleaned up. |
 
-These observations did **not** exercise a fresh zero-context invitation, a complete two-round Practice Pair, Claude, Gemini, both recommended ChatGPT models, or a repeated-run reliability target. Those items remain pending below and must not be described as passed in the README, video, or submission.
+These observations did **not** exercise a fresh zero-context invitation, a complete two-round Sketch Duet, Claude, Gemini, both recommended ChatGPT models, a repeated-run reliability target, or either new competitive mode. Those items remain pending below and must not be described as passed in the README, video, or submission.
 
 ## 60-second judge-path rehearsal
 
@@ -61,12 +61,12 @@ Use a clean browser profile and the production domain.
 
 - [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
-- [ ] Human creates Practice Pair, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent opens the `agent.mcpencil.com` invite, calls `play_mcpencil`, and connects with a separate opaque identity.
+- [ ] Human creates Sketch Duet, sees no **Invite a person** action, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent opens the `agent.mcpencil.com` invite, calls `play_mcpencil`, and connects with a separate opaque identity.
 - [ ] The pasted agent URL uses `https://agent.mcpencil.com/webmcp/rooms/{code}`, remains exactly `invite=agent` with a `#webmcp` fragment, and adjacent prose cannot become part of the query value.
 - [ ] Calling `play_mcpencil` from the already seated human document fails without joining and returns the exact separate agent invite.
 - [ ] A fresh agent uses its WebMCP-capable/in-app browser rather than a generic Chrome-control integration, then performs all game actions through page-exposed tools.
 - [ ] An unsupported browser reports that WebMCP is unavailable instead of clicking the join form or asking the human to dismiss unrelated browser UI.
-- [ ] Host changes to rounds and time per round appear for every connected player and survive a reload.
+- [ ] Host changes to the mode-allowed settings appear for every connected player and survive a reload: rounds plus time in Sketch Duet and Team Match, time only in Free-for-All.
 - [ ] Non-host players can see the synchronized settings but cannot change them through either the UI or WebMCP.
 - [ ] Changing settings resets connected human ready states while agent seats remain auto-ready.
 - [ ] Round one assigns the isolated agent seat as artist and the human as guesser.
@@ -82,21 +82,36 @@ Use a clean browser profile and the production domain.
 - [ ] Whole flow completes in 60–90 seconds without manual recovery.
 - [ ] A 6- or 8-round match completes without descriptor re-registration, a tool-configuration-limit warning, or loss of WebMCP access.
 
-Run at least five rehearsals. Target four clean first-attempt completions; the final three runs before recording must be clean.
+Run at least five judge-path rehearsals. Target four clean first-attempt completions; the final three runs before recording must be clean.
+
+## Mode-overhaul production verification
+
+**Status: pending deployment and production playtest.** The historical diagnostics above predate the renamed modes and Free-for-All implementation. Do not present any row in this section as observed production evidence until the exact public commit is deployed and tested.
+
+- [ ] Landing cards and lobby copy consistently show **Sketch Duet**, **Team Match**, and **Free-for-All** with graphics and descriptions that match their actual rules.
+- [ ] A human invite deep link scrolls to the prefilled join form; an agent invite remains on the isolated WebMCP handoff path.
+- [ ] Sketch Duet admits exactly one human plus one agent, exposes no human-invite action to its human creator, alternates roles for 2, 4, or 6 rounds, and starts automatically only after both sockets connect.
+- [ ] Team Match requires 4–8 players split into two teams of 2–4, runs the selected 4, 6, or 8 rounds, rotates artists, permits only active teammates to guess, and awards only the team score.
+- [ ] Free-for-All requires 3–8 players, exposes only drawing time as a host setting, freezes the starting roster and stable shuffled artist order, and creates exactly one round per starting player.
+- [ ] During every Free-for-All round, all starting non-artists can guess simultaneously, the first accepted correct guess ends the round, and later guesses cannot mutate the result.
+- [ ] A solved Free-for-All round independently credits the artist and first solver `100 + remaining whole seconds`; an unsolved round awards neither; the individual leaderboard and final standings agree with persisted scores.
+- [ ] Free-for-All can end in a valid tie and displays all tied leaders without inventing a tie-breaker.
+- [ ] Human and agent seats complete all three modes through the same stable ten-tool WebMCP registry without descriptor churn.
 
 ## Multiplayer matrix
 
 | Scenario | Clients | Expected result | Pass |
 |---|---:|---|---|
-| Two humans, same team | 2 | Artist stroke appears remotely; teammate can guess; nonartist cannot draw | [ ] |
-| Mixed 2v2 Arena | 4 | Configured rounds alternate teams and rotate artists; scores persist | [ ] |
-| Human vs agent Exhibition | 2+ | Controller labels change presentation, not authority rules | [ ] |
-| Agent vs agent Exhibition | 2+ agents | One agent draws while only eligible teammate agent guesses | [ ] |
-| Late spectator | 1 late join | Canonical canvas/state loads without replaying private prompt | [ ] |
+| Sketch Duet | 1 human + 1 agent | Starts only after both sockets connect; roles alternate; no human invite is offered | [ ] |
+| Mixed 2v2 Team Match | 4 | Configured rounds alternate teams and rotate artists; only teammates guess; team score persists | [ ] |
+| Full Team Match | 8 | Two teams cap at four seats; every active artist remains mode-authorized across rotation | [ ] |
+| Three-player Free-for-All | 3 | Roster freezes; shuffled order is stable; exactly three rounds run; each player draws once | [ ] |
+| Mixed eight-player Free-for-All | 8 | All seven non-artists may guess; individual standings persist through all eight rounds | [ ] |
+| Late join after start | 1 attempted join | Frozen competitive roster is unchanged and no new competitor is added | [ ] |
 | Artist disconnect | 2+ | Timer continues; reconnect restores seat and canvas | [ ] |
 | Guesser disconnect | 2+ | Other clients continue; reconnect gets missed version(s) | [ ] |
 | Durable Object eviction | test helper | Reconstructed object preserves state and scheduled round semantics | [ ] |
-| Simultaneous guesses | 2 guessers | One correct transition/score; later mutation receives round-ended result | [ ] |
+| Simultaneous Free-for-All guesses | 2+ guessers | First correct transition credits that solver and the artist once; later mutation receives round-ended result | [ ] |
 | Duplicate stroke | 1 artist | Same idempotency key returns duplicate acknowledgement, no extra stroke | [ ] |
 | Stale stroke | 2 artist sessions | Old expected version is rejected with current version guidance | [ ] |
 | Expired stroke | 1 artist | Mutation after `endsAt` is rejected and round finalizes once | [ ] |
@@ -142,8 +157,8 @@ No row below is complete yet. Record the exact app/browser build, model, invitat
 
 | Client target | Required before claiming support | Recorded clean runs | Status |
 |---|---|---:|---|
-| ChatGPT desktop + GPT-5.6 Sol | Five fresh zero-context Practice invitations; final three consecutive runs clean | 0 | Pending |
-| ChatGPT desktop + GPT-5.6 Terra | Five fresh zero-context Practice invitations; final three consecutive runs clean | 0 | Pending |
+| ChatGPT desktop + GPT-5.6 Sol | Five fresh zero-context Sketch Duet invitations; final three consecutive runs clean | 0 | Pending |
+| ChatGPT desktop + GPT-5.6 Terra | Five fresh zero-context Sketch Duet invitations; final three consecutive runs clean | 0 | Pending |
 | Claude browser-agent surface | First confirm that the tested public client exposes page WebMCP; then run three fresh invitations | 0 | Capability and runs pending; not currently claimed as supported |
 | Gemini browser-agent surface | First confirm that the tested public client exposes page WebMCP; then run three fresh invitations | 0 | Capability and runs pending; not currently claimed as supported |
 

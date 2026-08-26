@@ -8,6 +8,8 @@ export const ROUND_RESULT_MIN_MS = 8_000;
 export const ROUND_RESULT_MAX_MS = 15_000;
 export const TEAM_ROUND_COUNT = 6;
 export const MAX_BATCH_PRIMITIVES = 12;
+export const FREE_FOR_ALL_MIN_PLAYERS = 3;
+export const FREE_FOR_ALL_MAX_PLAYERS = 8;
 
 export const PRACTICE_ROUND_OPTIONS = [2, 4, 6] as const;
 export const ARENA_ROUND_OPTIONS = [4, 6, 8] as const;
@@ -24,7 +26,7 @@ export type ControllerType = (typeof CONTROLLER_TYPES)[number];
 export type ActionOrigin = (typeof ORIGINS)[number];
 export type PaletteColor = (typeof PALETTE)[number];
 export type StrokeWidth = (typeof STROKE_WIDTHS)[number];
-export type RoomMode = "practice" | "arena" | "exhibition";
+export type RoomMode = "practice" | "arena" | "free-for-all";
 export type MatchPhase = "lobby" | "round-prep" | "drawing" | "round-end" | "match-end";
 
 const XCoordinate = z.number().finite().min(0).max(CANVAS_WIDTH);
@@ -213,6 +215,19 @@ export interface Seat {
   isHost: boolean;
   isReady: boolean;
   isConnected: boolean;
+  score: number;
+}
+
+export interface PlayerStanding {
+  seatId: string;
+  name: string;
+  controller: ControllerType;
+  score: number;
+  placement: number;
+  successfulDrawings: number;
+  correctGuesses: number;
+  fastestSolveMs: number | null;
+  averageSolveMs: number | null;
 }
 
 export interface CanvasEvent {
@@ -255,6 +270,8 @@ export interface RoundResult {
   team: TeamId;
   guessedBySeatId?: string;
   pointsAwarded: number;
+  artistPointsAwarded?: number;
+  guesserPointsAwarded?: number;
   elapsedMs: number;
   strokeCount: number;
   toolCallCount: number;
@@ -281,6 +298,7 @@ export interface RoomSnapshot {
   endsAt: number | null;
   canvasVersion: number;
   scores: Record<TeamId, number>;
+  leaderboard?: PlayerStanding[];
   seats: Seat[];
   canvas: CanvasEvent[];
   guesses: GuessEvent[];
@@ -301,7 +319,7 @@ export const SeatTokenSchema = z.string().min(32).max(256);
 export const TeamSchema = z.enum(TEAM_IDS);
 export const ControllerSchema = z.enum(CONTROLLER_TYPES);
 export const OriginSchema = z.enum(ORIGINS);
-export const ModeSchema = z.enum(["practice", "arena", "exhibition"]);
+export const ModeSchema = z.enum(["practice", "arena", "free-for-all"]);
 
 export const CreateRoomRequestSchema = z.object({
   name: PlayerNameSchema,
@@ -427,6 +445,12 @@ export function isArtist(snapshot: RoomSnapshot, seatId: string | null): boolean
 
 export function canGuess(snapshot: RoomSnapshot, seatId: string | null): boolean {
   if (seatId === null || snapshot.phase !== "drawing") return false;
+  return isEligibleGuesser(snapshot, seatId);
+}
+
+export function isEligibleGuesser(snapshot: RoomSnapshot, seatId: string | null): boolean {
+  if (seatId === null || seatId === snapshot.artistSeatId) return false;
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
-  return seat !== undefined && seat.team === snapshot.activeTeam && seat.id !== snapshot.artistSeatId;
+  if (seat === undefined) return false;
+  return snapshot.mode === "free-for-all" || seat.team === snapshot.activeTeam;
 }

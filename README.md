@@ -2,7 +2,7 @@
 
 **Bring your own agent to game night.**
 
-MCPencil is a realtime draw-and-guess party game where humans and browser agents are first-class players. An agent can receive a private prompt and draw with constrained vector tools while people guess; then the roles reverse and the agent interprets a human drawing and submits its answer. The same room engine supports human-agent pairs, mixed teams, humans versus agents, and agent-versus-agent exhibitions.
+MCPencil is a realtime draw-and-guess party game where humans and browser agents are first-class players. An agent can receive a private prompt and draw with constrained vector tools while people guess; then the roles reverse and the agent interprets a human drawing and submits its answer. The same room engine supports cooperative human-agent duets, mixed-team matches, and individual free-for-alls.
 
 - **Play:** [https://mcpencil.com](https://mcpencil.com)
 - **Source:** [github.com/yaboijbigs/mcpencil](https://github.com/yaboijbigs/mcpencil)
@@ -15,9 +15,9 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 
 ## The 60-second judge path
 
-1. Open [mcpencil.com](https://mcpencil.com) in ChatGPT's in-app browser with **GPT-5.6 Sol or Terra** and choose **Practice Pair**.
+1. Open [mcpencil.com](https://mcpencil.com) in ChatGPT's in-app browser with **GPT-5.6 Sol or Terra** and choose **Sketch Duet**.
 2. Click **Invite an AI player** and paste the copied zero-context invitation into a fresh browser-agent conversation.
-3. The invitation tells the agent to open the agent-specific room URL and call `play_mcpencil`. That zero-argument tool joins and readies the agent; only then does Practice Pair begin.
+3. The invitation tells the agent to open the agent-specific room URL and call `play_mcpencil`. That zero-argument tool joins and readies the agent; only then does Sketch Duet begin.
 4. In round one, watch the WebMCP Lens: the private prompt stays masked and each `draw_stroke` call produces exactly one immediately visible mark. Guess the picture in the game UI.
 5. In round two, memorize the private prompt and hide the card. Your first stroke starts the configured round clock and makes `submit_guesses` actionable; draw while the agent interprets the evolving canvas.
 6. Open the result and replay panels. Compare every guess, declared human/WebMCP origin, time-to-guess, strokes, and tool calls.
@@ -45,7 +45,7 @@ The collapsible **WebMCP Lens** makes this visible to judges: the exact tools ac
 
 ### Zero-context invitations
 
-Every lobby has two deliberately different share actions. **Invite a person** copies the plain room URL. **Invite an AI player** copies a complete interface handoff plus a structurally delimited, self-describing `https://agent.mcpencil.com/webmcp/rooms/{code}?invite=agent#webmcp` link. The dedicated agent origin gives the agent its own document and `sessionStorage`; a seated human document refuses to create a same-page agent and returns the exact isolated URL instead. The handoff tells the agent to use its WebMCP-capable browser surface, visually inspect the canvas when guessing, and perform every game action through MCPencil's page-exposed tools. It calls out `play_mcpencil({})`, every returned `nextAction`, and `match-end`; if WebMCP is absent, the agent reports that limitation instead of substituting clicks or DOM automation.
+Team Match and Free-for-All lobbies have two deliberately different share actions. **Invite a person** copies the plain room URL; opening it prefills the room code and scrolls the join form into view. **Invite an AI player** copies a complete interface handoff plus a structurally delimited, self-describing `https://agent.mcpencil.com/webmcp/rooms/{code}?invite=agent#webmcp` link. Sketch Duet requires exactly one human and one agent, so its human-created lobby offers only the AI invitation. The dedicated agent origin gives the agent its own document and `sessionStorage`; a seated human document refuses to create a same-page agent and returns the exact isolated URL instead. The handoff tells the agent to use its WebMCP-capable browser surface, visually inspect the canvas when guessing, and perform every game action through MCPencil's page-exposed tools. It calls out `play_mcpencil({})`, every returned `nextAction`, and `match-end`; if WebMCP is absent, the agent reports that limitation instead of substituting clicks or DOM automation.
 
 The page does not depend on an MCPencil skill, system prompt, model API, or prior conversation. The agent deep link reinforces the user's intent with a room-specific WebMCP document title, a dedicated no-form handoff page, a visible accessible alert, and a minimal initial actionable set. It also recognizes the legacy `invite=agentOpen` value produced when a chat client glued prose to an undelimited URL. `play_mcpencil` needs no arguments when the URL contains the room code, supplies a default display name, joins as an automatically ready agent seat, and returns the exact next tool and arguments. Every subsequent state repeats `mustContinue` and the match-end completion condition.
 
@@ -56,13 +56,13 @@ Tools are registered imperatively with `document.modelContext.registerTool`. The
 | Tool | Actionable when | Mutates | What it does |
 |---|---|---:|---|
 | `get_match_state` | Always | No | Returns a role-safe summary. An authenticated active agent artist also receives its private prompt so it can draw immediately; an eligible agent guesser receives a `32 × 22` canvas-only text raster, bounded canonical geometry, and recent guesses. No other role receives either private prompt or guesser-only canvas data. |
-| `start_practice` | Landing/practice | Yes | Creates the balanced agent-draws/human-draws judge path and joins the caller. |
-| `play_mcpencil` | Room invite/practice | Yes | Zero-context entry point. Joins and readies an agent from the room URL with no required arguments, then returns the exact next action and match-end completion condition. |
-| `configure_match` | Lobby, host only | Yes | Sets an allowed round count and round duration before play begins. The authoritative room validates, persists, and broadcasts the change. |
-| `start_match` | Lobby, host only | Yes | Starts an eligible match after server-side lobby validation. |
+| `start_practice` | Landing/Sketch Duet | Yes | Creates the balanced agent-draws/human-draws judge path and joins the caller. |
+| `play_mcpencil` | Room invite/Sketch Duet | Yes | Zero-context entry point. Joins and readies an agent from the room URL with no required arguments, then returns the exact next action and match-end completion condition. |
+| `configure_match` | Lobby, host only | Yes | Sets the round duration and, where the selected mode permits it, the round count. The authoritative room validates, persists, and broadcasts the change. |
+| `start_match` | Competitive lobby, host only | Yes | Starts an eligible Team Match or Free-for-All after server-side lobby validation. Sketch Duet starts automatically when both players connect. |
 | `draw_stroke` | Prepared/drawing round, active agent artist only | Yes | Commits exactly one validated primitive. The first stroke starts the configured clock; its acknowledgement supplies the next canvas version. |
 | `undo_last_stroke` | Prepared/drawing round, active agent artist only | Yes | Removes the caller's latest accepted stroke at the expected canvas version. |
-| `submit_guesses` | Drawing, eligible agent guesser | Yes | Submits 1–3 ordered, distinct guesses as real room actions, 350 ms apart, stopping on the first correct answer. Every accepted attempt is broadcast and retained. |
+| `submit_guesses` | Drawing, eligible agent guesser | Yes | Submits 1–3 ordered, distinct guesses as real room actions, 350 ms apart, stopping on the first correct answer. Eligibility follows the selected mode: duet partner, active teammate, or any non-artist Free-for-All player. Every accepted attempt is broadcast and retained. |
 | `get_round_result` | After any completed round | No | Returns the revealed answer, points, elapsed time, stroke count, tool-call count, and complete guess transcript. |
 | `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
 
@@ -78,13 +78,13 @@ Because [portable multimodal image tool results are not yet specified across Web
 
 ## Game modes
 
-- **Practice Pair:** a noncompetitive proof path—agent draws, then human draws—with 2, 4, or 6 rounds. Creating practice opens a one-seat lobby and does not start a game. `play_mcpencil` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. The human-artist round remains private and untimed until the human's first stroke; the guess action is not authorized before it lands.
-- **Team Arena:** two mixed teams of 2–4 seats play 4, 6, or 8 rounds, alternating teams and rotating artists.
-- **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
+- **Sketch Duet:** exactly one human and one browser agent cooperate and alternate drawing and guessing roles. The host chooses 2, 4, or 6 rounds. The room waits in its lobby until both isolated sockets connect, then starts automatically. A human-artist turn stays private and untimed until the prompt card is hidden and the first stroke lands.
+- **Team Match:** 4–8 human or agent players form two teams of 2–4. The host chooses 4, 6, or 8 rounds. Teams alternate turns, artists rotate, only the active artist's teammates may guess, and points accumulate on the team score.
+- **Free-for-All:** 3–8 human or agent players compete for individual placement. Starting the match freezes the roster and a stable shuffled artist order. Every starting player draws exactly once, so the roster size determines the number of rounds. All other players may guess simultaneously; the first correct guess ends the round. The artist and first solver each independently earn `100 + remaining whole seconds`, and ties in the final standings are valid.
 
-The host chooses 45, 60, or 90 seconds per round in the waiting room. Defaults remain 2 rounds for Practice Pair, 6 rounds for Team Arena, and 90 seconds per round. Everyone sees the synchronized settings; only the host can change them.
+The host chooses 45, 60, or 90 seconds per round in every waiting room. Sketch Duet and Team Match additionally expose their allowed round counts; Free-for-All derives its round count from the frozen starting roster. Everyone sees synchronized settings, and only the host can change them.
 
-Only the active artist's teammates may guess. A correct answer awards `100 + remaining whole seconds`; wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers. The server-side deck contains 174 concrete single-word nouns, including a 139-card Practice pool; prompts are dealt without replacement for the entire match.
+Wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers. The server-side deck contains 174 concrete single-word nouns, including a 139-card Sketch Duet pool; prompts are dealt without replacement for the entire match.
 
 ## Architecture
 
@@ -160,10 +160,10 @@ After deployment, verify DNS/custom-domain activation in the same Cloudflare acc
 
 ## Security and integrity
 
-- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In every human-artist round across Practice, Arena, and Exhibition, the prompt must be memorized, hidden, and unmounted before any agent can receive `submit_guesses`; the opening stroke then begins the timed drawing phase. The agent's separate-origin document never contains the human prompt.
+- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In every human-artist round across Sketch Duet, Team Match, and Free-for-All, the prompt must be memorized, hidden, and unmounted before an eligible agent guesser can receive `submit_guesses`; the opening stroke then begins the timed drawing phase. The agent's separate-origin document never contains the human prompt.
 - Anonymous seat credentials use opaque random tokens; only token hashes are persisted. Because the browser WebSocket constructor cannot set an `Authorization` header, the current client sends the token in the TLS-protected WebSocket handshake query. Application logs must not record that URL, and replacing it with a short-lived socket ticket remains a release-hardening item.
 - Names and guesses are length-limited data, never HTML or instructions.
-- Every mutation is authorized against room phase, seat, role, team, expiry, expected canvas version, and rate limits.
+- Every mutation is authorized against room mode, phase, seat, artist/guesser eligibility, expiry, expected canvas version, and rate limits.
 - Duplicate drawing idempotency keys are harmless; expired-round writes and stale versions are rejected.
 - Responses set CSP, `Origin-Agent-Cluster: ?1`, and `Permissions-Policy: tools=(self)`; tools are not exposed cross-origin.
 - Disconnects do not pause timers. Reconnecting players recover the canonical snapshot and events after their last canvas version.
@@ -176,7 +176,7 @@ Automated coverage targets:
 
 - strict vector schemas, geometry bounds, payload limits, and rejected unknown fields;
 - room isolation, SQLite persistence after eviction, alarm expiry, WebSocket reconnect, and version catch-up;
-- lobby constraints, artist rotation, scoring, idempotency, normalization, typo tolerance, and rate limiting;
+- lobby constraints, mode-specific artist rotation, team and individual scoring, idempotency, normalization, typo tolerance, and rate limiting;
 - proof that private prompts never enter a shared response, event, replay record, or log object;
 - parity between human UI and WebMCP commands, including their declared origin labels;
 - stable page-lifetime descriptor registration, exact role/controller/gate-driven actionability, in-flight cancellation, and result annotations.
@@ -189,7 +189,7 @@ The release evaluation uses 12 original golden cards. The target is at least 8/1
 - MCPencil deliberately has no built-in LLM fallback. The participating browser agent supplies the intelligence.
 - Anonymous room identity is device-local; clearing site storage loses the reconnect token.
 - Rooms are designed for small party sessions (up to eight active seats), not massive spectator broadcasts.
-- A five-character Practice room code is an invitation locator, not a secret or proof of identity. The first complementary controller that knows it can claim the remaining seat; signed one-use agent invitations are future hardening.
+- A five-character Sketch Duet room code is an invitation locator, not a secret or proof of identity. The first complementary controller that knows it can claim the remaining seat; signed one-use agent invitations are future hardening.
 - The server enforces that a seat's submitted origin matches its declared controller type, but it does not cryptographically attest that a `webmcp` action came from a particular model or prohibit a modified client from imitating that controller. Lens and analytics labels are provenance declarations, not identity proofs.
 
 ## Challenge-period provenance

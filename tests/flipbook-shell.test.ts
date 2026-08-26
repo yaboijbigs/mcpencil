@@ -30,7 +30,7 @@ describe("FlipbookShell", () => {
 
     act(() => {
       renderer.update(shell(
-        { key: "INK42:lobby", label: "Practice Pair · set up the table", folio: "02", tone: "practice" },
+        { key: "INK42:lobby", label: "Sketch Duet · set up the table", folio: "02", tone: "practice" },
         "Invite your agent",
       ));
     });
@@ -50,7 +50,7 @@ describe("FlipbookShell", () => {
 
     act(() => {
       renderer.update(shell(
-        { key: "INK42:round:0", label: "Practice Pair · round 1", folio: "04", tone: "practice" },
+        { key: "INK42:round:0", label: "Sketch Duet · round 1", folio: "04", tone: "practice" },
         "Live canvas",
       ));
     });

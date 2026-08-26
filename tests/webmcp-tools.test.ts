@@ -53,6 +53,7 @@ const human = {
   isHost: true,
   isReady: true,
   isConnected: true,
+  score: 0,
 };
 
 const agent = {
@@ -63,6 +64,7 @@ const agent = {
   isHost: false,
   isReady: true,
   isConnected: true,
+  score: 0,
 };
 
 function practiceSnapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
@@ -314,7 +316,7 @@ describe("registered WebMCP tool contracts", () => {
     expect(modelContext.tools.size).toBe(0);
   });
 
-  it("executes a complete two-round Practice Pair through the registered handlers", async () => {
+  it("executes a complete two-round Sketch Duet through the registered handlers", async () => {
     let revision = 1;
     let canvasVersion = 0;
     const commands: RoomCommand[] = [];
@@ -609,6 +611,171 @@ describe("registered WebMCP tool contracts", () => {
       "ready_next",
       "submit_guess",
     ]);
+  });
+
+  it("lets an agent non-artist guess and read individual Free-for-All results", async () => {
+    const agentGuesser = { ...agent, team: "coral" as const, score: 175 };
+    const rival = {
+      id: "free-for-all-rival",
+      name: "Pixel",
+      team: "coral" as const,
+      controller: "human" as const,
+      isHost: false,
+      isReady: true,
+      isConnected: true,
+      score: 175,
+    };
+    const artist = { ...human, score: 90 };
+    const leaderboard = [
+      {
+        seatId: agentGuesser.id,
+        name: agentGuesser.name,
+        controller: agentGuesser.controller,
+        score: 175,
+        placement: 1,
+        successfulDrawings: 0,
+        correctGuesses: 1,
+        fastestSolveMs: 40_000,
+        averageSolveMs: 40_000,
+      },
+      {
+        seatId: rival.id,
+        name: rival.name,
+        controller: rival.controller,
+        score: 175,
+        placement: 1,
+        successfulDrawings: 1,
+        correctGuesses: 0,
+        fastestSolveMs: null,
+        averageSolveMs: null,
+      },
+      {
+        seatId: artist.id,
+        name: artist.name,
+        controller: artist.controller,
+        score: 90,
+        placement: 3,
+        successfulDrawings: 0,
+        correctGuesses: 0,
+        fastestSolveMs: null,
+        averageSolveMs: null,
+      },
+    ];
+    const drawing = practiceSnapshot({
+      mode: "free-for-all",
+      totalRounds: 3,
+      artistSeatId: artist.id,
+      seats: [artist, agentGuesser, rival],
+      leaderboard,
+    });
+    const command = vi.fn(async (roomCommand: RoomCommand) => commandResult({
+      revision: 2,
+      ...(roomCommand.type === "submit_guess"
+        ? { correct: roomCommand.guess === "volcano", close: false, pointsAwarded: 140 }
+        : {}),
+    }));
+    const props: HookProps = {
+      snapshot: drawing,
+      seatId: agentGuesser.id,
+      command,
+      privatePrompt: vi.fn(async () => ({ prompt: "volcano", category: "nature", roundIndex: 0 })),
+      startPractice: vi.fn(async () => undefined),
+      joinMatch: vi.fn(async () => undefined),
+    };
+    const renderer = await mountHook(props);
+
+    expect(latestHookResult?.toolNames).toEqual(["get_match_state", "submit_guesses"]);
+    expect(latestHookResult?.actionableTools).toEqual(latestHookResult?.toolNames);
+    const state = await modelContext.tool("get_match_state").execute({}, toolSignal()) as Record<string, unknown>;
+    expect(state).toMatchObject({
+      mode: "free-for-all",
+      scoring: "individual",
+      yourRole: "guesser",
+      yourScore: 175,
+      leaderboard,
+      nextAction: { tool: "submit_guesses" },
+    });
+    expect(state).not.toHaveProperty("yourTeam");
+    expect(state).not.toHaveProperty("activeTeam");
+    expect(state).not.toHaveProperty("scores");
+
+    const guess = await modelContext.tool("submit_guesses").execute({
+      guesses: ["volcano"],
+    }, toolSignal()) as Record<string, unknown>;
+    expect(guess).toMatchObject({
+      accepted: true,
+      correct: true,
+      attempts: [{ guess: "volcano", correct: true }],
+      nextAction: { tool: "get_match_state" },
+    });
+    expect(command).toHaveBeenCalledWith({
+      type: "submit_guess",
+      guess: "volcano",
+      origin: "webmcp",
+    }, expect.any(AbortSignal));
+
+    const roundEnd = practiceSnapshot({
+      ...drawing,
+      phase: "round-end",
+      roundResult: {
+        roundIndex: 0,
+        prompt: "volcano",
+        artistSeatId: artist.id,
+        team: "cobalt",
+        guessedBySeatId: agentGuesser.id,
+        pointsAwarded: 140,
+        artistPointsAwarded: 140,
+        guesserPointsAwarded: 140,
+        elapsedMs: 50_000,
+        strokeCount: 6,
+        toolCallCount: 0,
+      },
+      guesses: [{
+        id: "free-for-all-guess",
+        roundIndex: 0,
+        seatId: agentGuesser.id,
+        displayName: agentGuesser.name,
+        guess: "volcano",
+        origin: "webmcp",
+        isCorrect: true,
+        createdAt: Date.now(),
+      }],
+    });
+    await updateHook(renderer, { ...props, snapshot: roundEnd });
+    const roundResult = await modelContext.tool("get_round_result").execute({}, toolSignal()) as Record<string, unknown>;
+    expect(roundResult).toMatchObject({
+      result: {
+        prompt: "volcano",
+        artist: artist.name,
+        guessedBy: agentGuesser.name,
+        artistPointsAwarded: 140,
+        guesserPointsAwarded: 140,
+        scoring: "individual",
+        instruction: expect.stringContaining("independently"),
+      },
+    });
+    expect(JSON.stringify(roundResult)).not.toContain("team_result");
+
+    const matchEnd = { ...roundEnd, phase: "match-end" as const };
+    await updateHook(renderer, { ...props, snapshot: matchEnd });
+    const complete = await modelContext.tool("get_match_state").execute({}, toolSignal()) as Record<string, unknown>;
+    expect(complete).toMatchObject({
+      mustContinue: false,
+      scoring: "individual",
+      outcome: {
+        kind: "individual_result",
+        winners: [
+          { seatId: agentGuesser.id, name: agentGuesser.name, score: 175 },
+          { seatId: rival.id, name: rival.name, score: 175 },
+        ],
+      },
+    });
+    expect(complete).not.toHaveProperty("yourTeam");
+    expect(complete).not.toHaveProperty("activeTeam");
+    expect(complete).not.toHaveProperty("scores");
+    expect(JSON.stringify(complete)).not.toContain("team_result");
+
+    await act(async () => renderer.unmount());
   });
 
   it("joins successfully from a fresh isolated agent view", async () => {

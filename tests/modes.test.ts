@@ -1,17 +1,18 @@
 import { describe, expect, it } from "vitest";
-import type { ControllerType, RoomSnapshot, TeamId } from "../src/shared/game";
+import type { RoomSnapshot } from "../src/shared/game";
 import {
   GAME_MODES,
-  getExhibitionMatchup,
+  getFreeForAllStandings,
+  getMissingSketchDuetController,
   MODE_CATALOG,
 } from "../src/client/modes";
 
-function exhibitionSnapshot(
-  seats: Array<{ id: string; team: TeamId; controller: ControllerType }>,
+function freeForAllSnapshot(
+  seats: Array<{ id: string; name: string; score: number }>,
 ): RoomSnapshot {
   return {
     roomCode: "INK42",
-    mode: "exhibition",
+    mode: "free-for-all",
     phase: "lobby",
     revision: 1,
     roundIndex: 0,
@@ -24,7 +25,8 @@ function exhibitionSnapshot(
     scores: { cobalt: 0, coral: 0 },
     seats: seats.map((seat, index) => ({
       ...seat,
-      name: `Player ${index + 1}`,
+      team: index % 2 === 0 ? "cobalt" : "coral",
+      controller: index % 2 === 0 ? "human" : "agent",
       isHost: index === 0,
       isReady: true,
       isConnected: true,
@@ -45,23 +47,47 @@ function exhibitionSnapshot(
 
 describe("frontend game mode catalog", () => {
   it("keeps all server modes visible with their supported round counts", () => {
-    expect(GAME_MODES.map((mode) => mode.id)).toEqual(["practice", "arena", "exhibition"]);
+    expect(GAME_MODES.map((mode) => mode.id)).toEqual(["practice", "arena", "free-for-all"]);
     expect(MODE_CATALOG.practice).toMatchObject({ recommended: true, rounds: [2, 4, 6] });
     expect(MODE_CATALOG.arena.rounds).toEqual([4, 6, 8]);
-    expect(MODE_CATALOG.exhibition.rounds).toEqual([4, 6, 8]);
+    expect(MODE_CATALOG["free-for-all"]).toMatchObject({
+      name: "Free-for-All",
+      roundsLabel: "1 per player",
+      rounds: [3, 4, 5, 6, 7, 8],
+    });
   });
 
-  it("describes exhibition controller makeup from connected team seats", () => {
-    const humanVsAgent = exhibitionSnapshot([
-      { id: "h1", team: "cobalt", controller: "human" },
-      { id: "a1", team: "coral", controller: "agent" },
-    ]);
-    const agentVsAgent = exhibitionSnapshot([
-      { id: "a1", team: "cobalt", controller: "agent" },
-      { id: "a2", team: "coral", controller: "agent" },
+  it("ranks individual scores stably and gives tied players the same place", () => {
+    const snapshot = freeForAllSnapshot([
+      { id: "first-tie", name: "Ink", score: 220 },
+      { id: "third", name: "Pixel", score: 80 },
+      { id: "second-tie", name: "Vector", score: 220 },
     ]);
 
-    expect(getExhibitionMatchup(humanVsAgent).label).toBe("Human vs Agent");
-    expect(getExhibitionMatchup(agentVsAgent).label).toBe("Agent vs Agent");
+    expect(getFreeForAllStandings(snapshot).map((standing) => ({
+      id: standing.seatId,
+      score: standing.score,
+      place: standing.placement,
+    }))).toEqual([
+      { id: "first-tie", score: 220, place: 1 },
+      { id: "second-tie", score: 220, place: 1 },
+      { id: "third", score: 80, place: 3 },
+    ]);
+  });
+
+  it("offers only the missing Sketch Duet controller type", () => {
+    expect(getMissingSketchDuetController([
+      { controller: "human", isConnected: true },
+    ])).toBe("agent");
+    expect(getMissingSketchDuetController([
+      { controller: "agent", isConnected: true },
+    ])).toBe("human");
+    expect(getMissingSketchDuetController([
+      { controller: "human", isConnected: false },
+    ])).toBe("agent");
+    expect(getMissingSketchDuetController([
+      { controller: "human", isConnected: true },
+      { controller: "agent", isConnected: true },
+    ])).toBeNull();
   });
 });

@@ -3,6 +3,7 @@ import type {
   CanvasEvent,
   ControllerType,
   JoinRoomResponse,
+  PlayerStanding,
   PrivatePrompt,
   RoomCommand,
   RoomMode,
@@ -14,6 +15,7 @@ import type {
 export interface ReplayPayload {
   roomCode: string;
   revision: number;
+  mode?: RoomMode;
   rounds: Array<{
     roundIndex: number;
     prompt: string;
@@ -24,10 +26,13 @@ export interface ReplayPayload {
     endedAt: number;
     guessedBySeatId?: string;
     pointsAwarded: number;
+    artistPointsAwarded?: number;
+    guesserPointsAwarded?: number;
   }>;
   canvas: Array<CanvasEvent & { reverted: boolean }>;
   guesses: import("../shared/game").GuessEvent[];
   analytics: import("../shared/game").MatchAnalytics;
+  leaderboard?: PlayerStanding[];
 }
 
 export class ApiError extends Error {

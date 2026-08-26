@@ -59,13 +59,15 @@ stateDiagram-v2
 
 Server invariants:
 
-- `lobby`: no prompt is accessible; only readiness, seat configuration, and host start are mutable.
-- `round-prep`: the artist may access the private prompt and send one opening stroke, but guessing is disabled and the configured round clock has not started. An eight-second fallback starts a stalled agent/arena turn; Practice Pair's human-artist turn instead clears that alarm and stays private until the human's first stroke.
-- `drawing`: exactly one artist and one active team exist; `endsAt` is persisted; only the artist may draw; only active-team non-artists may guess.
+- `lobby`: no prompt is accessible; only readiness, seat configuration, and applicable host settings are mutable. Sketch Duet starts automatically after its one human and one agent both connect; eligible competitive rooms require the host to start them.
+- `round-prep`: the artist may access the private prompt and send one opening stroke, but guessing is disabled and the configured round clock has not started. An eight-second fallback starts a stalled agent or competitive turn; Sketch Duet's human-artist turn instead clears that alarm and stays private until the human's first stroke.
+- `drawing`: exactly one artist exists and `endsAt` is persisted. Only that artist may draw. The eligible guessers are the duet partner, the active artist's non-artist teammates in Team Match, or every other starting player in Free-for-All.
 - `round-end`: drawing and guessing are immutable; the answer and full guess transcript are visible for at least eight seconds. All connected players may advance it after that minimum; a 15-second hard deadline advances it automatically.
 - `match-end`: scores, analytics, and replay are immutable.
 
-Practice Pair uses the same phases and command schemas with a balanced 2, 4, or 6-round schedule. Team Arena and Exhibition use 4, 6, or 8 rounds and classic artist rotation. The host may choose 45, 60, or 90 seconds per round while the room is in the lobby; the room persists and broadcasts the selected settings before play.
+Sketch Duet uses the same phases and command schemas for exactly one human and one agent, alternating roles across a host-selected 2, 4, or 6 rounds. Team Match uses two teams of 2–4 seats, a host-selected 4, 6, or 8 rounds, alternating team turns, and rotating artists. Free-for-All freezes its 3–8-player roster and shuffled artist order at start; every starting player owns exactly one round, so the roster size—not a host round-count setting—determines match length. The host may choose 45, 60, or 90 seconds per round in any lobby. Settings and the frozen competitive schedule are persisted and broadcast before play.
+
+Team Match credits `100 + remaining whole seconds` to the active team when a teammate solves the drawing. In Free-for-All, all non-artists may guess simultaneously; the first accepted correct guess ends the round and independently credits that guesser and the artist `100 + remaining whole seconds` each. Individual standings determine the winner, and equal totals remain ties.
 
 ## Command lifecycle
 
@@ -90,7 +92,7 @@ sequenceDiagram
 
 The acknowledgement follows persistence and the server's broadcast step and contains the authoritative version accepted by the room. Rendering is asynchronous on each receiving client, so the acknowledgement is not evidence that every browser has already painted that version.
 
-The command carries an explicit `origin` for drawable and guess actions: `human-ui` or `webmcp`. Origin is analytics data and is checked against the seat's declared controller type, never used as the source of authorization. Both origins hit the identical server handler. This label is not cryptographic attestation of a model, browser surface, or unmodified client.
+The command carries an explicit `origin` for drawable and guess actions: `human-ui` or `webmcp`. Origin is analytics data and is checked against the seat's declared controller type, never used as the source of authorization. Both origins hit the identical server handler. Mode, roster, role, and phase determine guess eligibility. This label is not cryptographic attestation of a model, browser surface, or unmodified client.
 
 ## Canonical vector model
 
@@ -135,7 +137,7 @@ Tool descriptors provide discoverability, not authorization. From each role-safe
 
 Production agent links use `agent.mcpencil.com`, served by the same Worker and room Durable Objects but separated from the human site by origin, document, `sessionStorage`, COOP, and origin policy. This lets the browser agent visually inspect its synchronized canvas without ever observing a human artist's private-prompt DOM. A `play_mcpencil` call from an already seated human document fails closed and returns the exact separate agent URL.
 
-Practice Pair is one authoritative two-seat room represented by two isolated browser documents. The human creates a waiting one-seat room, then the zero-context `play_mcpencil` entry tool joins from `agent.mcpencil.com` and returns a distinct opaque agent credential. The room starts only after both authenticated WebSockets connect. Human controls send the human token with `human-ui` origin; page tool handlers in the agent document send the agent token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them. Because controller type is declared at join time, the origin field records the intended path but cannot cryptographically prove that a modified client did not imitate it.
+Sketch Duet is one authoritative two-seat room represented by two isolated browser documents. The human creates a waiting one-seat room, then the zero-context `play_mcpencil` entry tool joins from `agent.mcpencil.com` and returns a distinct opaque agent credential. The room starts only after both authenticated WebSockets connect. Human controls send the human token with `human-ui` origin; page tool handlers in the agent document send the agent token with `webmcp` origin. The backend authorizes them as separate identities and alternates the artist between them. Because controller type is declared at join time, the origin field records the intended path but cannot cryptographically prove that a modified client did not imitate it.
 
 Tool outputs are concise and structured. Player-created names and guesses are labeled untrusted content. Tool descriptions explain when a call is appropriate but do not echo user-authored content into instructions.
 

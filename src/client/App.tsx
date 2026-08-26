@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type FormEvent } from "react";
 import {
   canGuess,
+  isEligibleGuesser,
   isArtist,
   type ControllerType,
   type GuessEvent,
@@ -19,7 +20,11 @@ import {
 } from "./invite";
 import { currentHumanPromptKey, humanPromptGate } from "./humanPromptGate";
 import { playAnotherMatch } from "./playAgain";
-import { getModeDefinition } from "./modes";
+import {
+  getFreeForAllStandings,
+  getMissingSketchDuetController,
+  getModeDefinition,
+} from "./modes";
 import { CanvasBoard, PrimitiveMark } from "./components/CanvasBoard";
 import { FlipbookShell } from "./components/FlipbookShell";
 import { LandingExperience } from "./components/LandingExperience";
@@ -132,9 +137,9 @@ export function App() {
       <AppHeader
         snapshot={session.snapshot}
         connected={session.connected}
-        copied={copiedInvite === "person"}
+        copiedInvite={copiedInvite}
         soundEnabled={sound.enabled}
-        onCopy={() => void copyInvite("person")}
+        onCopyInvite={(audience) => void copyInvite(audience)}
         onToggleSound={sound.toggle}
         onLeave={leaveToLanding}
       />
@@ -190,21 +195,33 @@ export function App() {
 function AppHeader({
   snapshot,
   connected,
-  copied,
+  copiedInvite,
   soundEnabled,
-  onCopy,
+  onCopyInvite,
   onToggleSound,
   onLeave,
 }: {
   snapshot: RoomSnapshot | null;
   connected: boolean;
-  copied: boolean;
+  copiedInvite: InviteAudience | null;
   soundEnabled: boolean;
-  onCopy(): void;
+  onCopyInvite(audience: InviteAudience): void;
   onToggleSound(): void;
   onLeave(): void;
 }) {
   const mode = snapshot ? getModeDefinition(snapshot.mode) : null;
+  const missingSketchDuetController = snapshot?.mode === "practice" && snapshot.phase === "lobby"
+    ? getMissingSketchDuetController(snapshot.seats)
+    : null;
+  const headerInviteAudience: InviteAudience | null = snapshot?.phase !== "lobby"
+    ? null
+    : snapshot.mode === "practice"
+      ? missingSketchDuetController === "agent"
+        ? "agent"
+        : missingSketchDuetController === "human"
+          ? "person"
+          : null
+      : "person";
   return (
     <header className="topbar">
       <a className="brand" href="/" onClick={(event) => {
@@ -219,9 +236,23 @@ function AppHeader({
       <div className="topbar-center">
         {snapshot ? <>
           <span className={`mode-chip mode-${snapshot.mode}`}>{mode?.name}</span>
-          <button className="room-chip" type="button" onClick={onCopy} title="Copy person invite link" aria-label={`Copy person invite link for room ${snapshot.roomCode}`}>
-            <small>ROOM</small><strong>{snapshot.roomCode}</strong>{copied ? <CheckIcon /> : <CopyIcon />}
-          </button>
+          {headerInviteAudience ? (
+            <button
+              className="room-chip"
+              type="button"
+              onClick={() => onCopyInvite(headerInviteAudience)}
+              title={`Copy ${headerInviteAudience === "agent" ? "AI" : "person"} invite`}
+              aria-label={`Copy ${headerInviteAudience === "agent" ? "AI" : "person"} invite for room ${snapshot.roomCode}`}
+            >
+              <small>{headerInviteAudience === "agent" ? "AI ROOM" : "ROOM"}</small>
+              <strong>{snapshot.roomCode}</strong>
+              {copiedInvite === headerInviteAudience ? <CheckIcon /> : headerInviteAudience === "agent" ? <BotIcon /> : <CopyIcon />}
+            </button>
+          ) : (
+            <span className="room-chip is-static" aria-label={`Room ${snapshot.roomCode}`}>
+              <small>ROOM</small><strong>{snapshot.roomCode}</strong><CheckIcon />
+            </span>
+          )}
           <span className={`connection-chip ${connected ? "online" : "reconnecting"}`}><span />{connected ? "Live" : "Reconnecting"}</span>
         </> : <span className="topbar-tagline">A drawing game where browser agents actually play.</span>}
       </div>
@@ -248,6 +279,8 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
 }) {
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const artist = snapshot.seats.find((seat) => seat.id === snapshot.artistSeatId);
+  const practice = snapshot.mode === "practice";
+  const freeForAll = snapshot.mode === "free-for-all";
   const isPrep = snapshot.phase === "round-prep";
   const humanArtist = isArtist(snapshot, seatId) && self?.controller === "human";
   const humanGuesser = canGuess(snapshot, seatId) && self?.controller === "human";
@@ -257,12 +290,10 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
   const agentGuesser = primaryAgentGuesser;
   const prepHumanGuesser = isPrep
     && self?.controller === "human"
-    && self.team === snapshot.activeTeam
-    && self.id !== snapshot.artistSeatId;
+    && isEligibleGuesser(snapshot, self.id);
   const prepPrimaryAgentGuesser = isPrep
     && self?.controller === "agent"
-    && self.team === snapshot.activeTeam
-    && self.id !== snapshot.artistSeatId;
+    && isEligibleGuesser(snapshot, self.id);
   const prepGuesser = prepHumanGuesser || prepPrimaryAgentGuesser;
   const [prompt, setPrompt] = useState<PrivatePrompt | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
@@ -322,7 +353,7 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
         : prepGuesser
           ? "OPENING STROKE PREP"
           : humanGuesser
-            ? "GUESS FOR YOUR TEAM"
+            ? freeForAll ? "BE FIRST TO GUESS" : "GUESS FOR YOUR TEAM"
             : primaryAgentGuesser
               ? "YOU ARE GUESSING"
               : agentGuesser
@@ -343,7 +374,7 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
         : prepGuesser
           ? `${artist?.name ?? "The artist"} is preparing one opening stroke. Guessing unlocks when it lands.`
           : humanGuesser
-            ? "Name it before the clock runs out."
+            ? freeForAll ? "Name it before anyone else." : "Name it before the clock runs out."
             : primaryAgentGuesser
               ? "Inspect the latest canvas, then call submit_guesses with broad candidates."
               : agentGuesser
@@ -388,13 +419,13 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
     );
   }
 
-  const practice = snapshot.mode === "practice";
-
   return (
     <main className="game-page">
-      <section className="game-scorebar">
+      <section className={`game-scorebar ${freeForAll ? "free-for-all-scorebar" : ""}`}>
         {practice ? (
           <PracticeScoreCard score={snapshot.scores.cobalt + snapshot.scores.coral} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
+        ) : freeForAll ? (
+          <FreeForAllLeaderboard snapshot={snapshot} selfId={seatId} compact />
         ) : (
           <TeamScore team="cobalt" score={snapshot.scores.cobalt} active={snapshot.activeTeam === "cobalt"} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
         )}
@@ -407,7 +438,7 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
           totalRounds={snapshot.totalRounds}
           label={timerLabel}
         />
-        {practice ? (
+        {practice || freeForAll ? (
           <ArtistCard artist={artist ?? null} isPrep={isPrep} />
         ) : (
           <TeamScore team="coral" score={snapshot.scores.coral} active={snapshot.activeTeam === "coral"} seats={snapshot.seats} artistId={snapshot.artistSeatId} />
@@ -421,7 +452,7 @@ function GameRoom({ snapshot, seatId, busy, lens, onCommand, onPrompt, onReplay,
       ) : (
         <div className="game-layout">
           <section className="play-column">
-            <div className={`role-banner team-${snapshot.activeTeam}`}>
+            <div className={`role-banner ${freeForAll ? "mode-free-for-all" : `team-${snapshot.activeTeam}`}`}>
               <span className="role-icon">{humanArtist ? <PencilIcon /> : agentArtist ? <BotIcon /> : <SparkIcon />}</span>
               <div>
                 <small>{roleLabel}</small>
@@ -466,6 +497,48 @@ function PracticeScoreCard({ score, seats, artistId }: { score: number; seats: R
         ))}
       </div>
     </div>
+  );
+}
+
+function FreeForAllLeaderboard({ snapshot, selfId, compact = false }: {
+  snapshot: RoomSnapshot;
+  selfId: string;
+  compact?: boolean;
+}) {
+  const standings = getFreeForAllStandings(snapshot);
+  return (
+    <section className={`free-for-all-leaderboard ${compact ? "is-compact" : ""}`} aria-label="Individual leaderboard">
+      <header>
+        <div><small>INDIVIDUAL SCORE</small><strong>Leaderboard</strong></div>
+        <span>{standings.length} players</span>
+      </header>
+      <ol>
+        {standings.map((standing) => (
+          <li
+            key={standing.seatId}
+            className={`${standing.seatId === selfId ? "is-self" : ""} ${standing.seatId === snapshot.artistSeatId ? "is-artist" : ""}`}
+          >
+            <span className="leaderboard-place" aria-label={`Place ${standing.placement}`}>#{standing.placement}</span>
+            <span className={`avatar tiny ${standing.controller}`} aria-hidden="true">
+              {standing.controller === "agent" ? <BotIcon /> : standing.name.slice(0, 1).toUpperCase()}
+            </span>
+            <span className="leaderboard-name">
+              <strong>{standing.name}{standing.seatId === selfId ? " (you)" : ""}</strong>
+              {standing.seatId === snapshot.artistSeatId ? <small><PencilIcon /> Drawing now</small> : <small>{standing.controller === "agent" ? "Agent" : "Human"}</small>}
+            </span>
+            <strong className="leaderboard-score">{standing.score}<small> pts</small></strong>
+            {!compact ? (
+              <dl className="leaderboard-stats">
+                <div><dt>Drawings solved</dt><dd>{standing.successfulDrawings}</dd></div>
+                <div><dt>Correct guesses</dt><dd>{standing.correctGuesses}</dd></div>
+                <div><dt>Fastest solve</dt><dd>{standing.fastestSolveMs === null ? "—" : `${(standing.fastestSolveMs / 1000).toFixed(1)}s`}</dd></div>
+                <div><dt>Average solve</dt><dd>{standing.averageSolveMs === null ? "—" : `${(standing.averageSolveMs / 1000).toFixed(1)}s`}</dd></div>
+              </dl>
+            ) : null}
+          </li>
+        ))}
+      </ol>
+    </section>
   );
 }
 
@@ -598,6 +671,7 @@ function RoundEnd({ snapshot, seatId, seconds, onNext, busy, lens }: { snapshot:
     .sort((left, right) => left.createdAt - right.createdAt);
   const selfReady = self?.isReady ?? false;
   const solved = Boolean(result?.pointsAwarded);
+  const freeForAll = snapshot.mode === "free-for-all";
 
   return (
     <div className="round-end-layout">
@@ -611,12 +685,16 @@ function RoundEnd({ snapshot, seatId, seconds, onNext, busy, lens }: { snapshot:
           </svg>
           {result?.prompt ?? "Prompt unavailable"}
         </p>
-        <div className="round-stat-row">
-          <div><small>Points</small><strong>+{result?.pointsAwarded ?? 0}</strong></div>
+        <div className={`round-stat-row ${freeForAll ? "is-free-for-all" : ""}`}>
+          {freeForAll ? <>
+            <div><small>Artist earned</small><strong>+{result?.artistPointsAwarded ?? result?.pointsAwarded ?? 0}</strong></div>
+            <div><small>First guesser</small><strong>+{result?.guesserPointsAwarded ?? result?.pointsAwarded ?? 0}</strong></div>
+          </> : <div><small>Points</small><strong>+{result?.pointsAwarded ?? 0}</strong></div>}
           <div><small>Guessed in</small><strong>{result?.elapsedMs ? `${(result.elapsedMs / 1000).toFixed(1)}s` : "—"}</strong></div>
           <div><small>Vector marks</small><strong>{result?.strokeCount ?? 0}</strong></div>
           <div><small>WebMCP calls</small><strong>{result?.toolCallCount ?? 0}</strong></div>
         </div>
+        {freeForAll ? <FreeForAllLeaderboard snapshot={snapshot} selfId={seatId} compact /> : null}
         <div className="result-transition" role="status" aria-live="polite">
           <span className="result-countdown">{seconds > 0 ? `0:${String(seconds).padStart(2, "0")}` : "Advancing…"}</span>
           <div>
@@ -697,30 +775,41 @@ function MatchEnd({ snapshot, seatId, lens, onReplay, onPlayAgain }: { snapshot:
     });
     return () => controller.abort();
   }, [onReplay, replayAttempt]);
-  const winner: TeamId | "tie" = snapshot.scores.cobalt === snapshot.scores.coral ? "tie" : snapshot.scores.cobalt > snapshot.scores.coral ? "cobalt" : "coral";
+  const teamWinner: TeamId | "tie" = snapshot.scores.cobalt === snapshot.scores.coral ? "tie" : snapshot.scores.cobalt > snapshot.scores.coral ? "cobalt" : "coral";
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const practice = snapshot.mode === "practice";
-  const exhibition = snapshot.mode === "exhibition";
+  const freeForAll = snapshot.mode === "free-for-all";
+  const standings = freeForAll ? getFreeForAllStandings(snapshot) : [];
+  const leaders = standings.filter((standing) => standing.placement === 1);
+  const leaderNames = leaders.map((standing) => standing.name);
+  const leaderLabel = leaderNames.length <= 1
+    ? leaderNames[0] ?? "No winner"
+    : leaderNames.length === 2
+      ? leaderNames.join(" and ")
+      : `${leaderNames.slice(0, -1).join(", ")}, and ${leaderNames.at(-1)}`;
   const practiceTurnsEach = snapshot.totalRounds / 2;
   const practiceTurnLabel = practiceTurnsEach === 1 ? "drawing" : "drawings";
   return (
     <main className="match-end-page">
-      <section className={`winner-banner ${winner !== "tie" && !practice ? `winner-${winner}` : ""}`}>
+      <section className={`winner-banner ${teamWinner !== "tie" && !practice && !freeForAll ? `winner-${teamWinner}` : ""} ${freeForAll ? "winner-free-for-all" : ""}`}>
         <span className="winner-rosette" aria-hidden="true">
-          <b>{practice ? "SKETCH" : "BEST IN"}</b>
-          <strong>{practice ? "DUO" : "SHOW"}</strong>
+          <b>{practice ? "SKETCH" : freeForAll ? "TOP" : "BEST IN"}</b>
+          <strong>{practice ? "DUO" : freeForAll ? "SKETCHER" : "SHOW"}</strong>
         </span>
         <div className="winner-banner-copy">
-          <span className="eyebrow">{practice ? `${snapshot.totalRounds}-round Practice Pair complete` : exhibition ? "Exhibition final" : "Team Arena final"}</span>
-          <h1>{practice ? "You and your agent speak sketch." : winner === "tie" ? "A perfect draw." : exhibition ? `${winner === "cobalt" ? "Cobalt" : "Coral"} owns the exhibition.` : `${winner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>
-          <p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : exhibition ? "Same canvas. Same rules. Human and agent provenance preserved." : winner === "tie" || self?.team === winner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p>
+          <span className="eyebrow">{practice ? `${snapshot.totalRounds}-round Sketch Duet complete` : freeForAll ? `${snapshot.totalRounds}-player Free-for-All final` : "Team Match final"}</span>
+          <h1>{practice ? "You and your agent speak sketch." : freeForAll ? leaders.length > 1 ? `${leaderLabel} share first place!` : `${leaderLabel} takes the sketchbook!` : teamWinner === "tie" ? "A perfect draw." : `${teamWinner === "cobalt" ? "Cobalt" : "Coral"} takes the sketchbook!`}</h1>
+          <p>{practice ? `${practiceTurnsEach} agent ${practiceTurnLabel}. ${practiceTurnsEach} human ${practiceTurnLabel}. ${snapshot.totalRounds} rounds of two-way WebMCP play.` : freeForAll ? `Every player drew once. ${leaders.length > 1 ? "The top score is tied" : `${leaderLabel} finished on top`} with ${leaders[0]?.score ?? 0} points.` : teamWinner === "tie" || self?.team === teamWinner ? "Human imagination. Agent precision. Excellent teamwork." : "A noble scribble. The rematch button is implied."}</p>
         </div>
         {practice ? (
           <div className="practice-complete" aria-hidden="true"><PeopleIcon /><span>↔</span><BotIcon /></div>
+        ) : freeForAll ? (
+          <div className="free-for-all-winner-score"><small>WINNING SCORE</small><strong>{leaders[0]?.score ?? 0}</strong><span>points</span></div>
         ) : (
           <div className="final-score"><span className="cobalt">{snapshot.scores.cobalt}</span><small>—</small><span className="coral">{snapshot.scores.coral}</span></div>
         )}
       </section>
+      {freeForAll ? <FreeForAllLeaderboard snapshot={snapshot} selfId={seatId} /> : null}
       <div className="end-content">
         <ReplayViewer events={snapshot.canvas} guesses={snapshot.guesses} analytics={snapshot.analytics} result={snapshot.roundResult} replay={replay} loading={replayLoading} error={replayError} onRetry={() => setReplayAttempt((attempt) => attempt + 1)} />
         <aside>

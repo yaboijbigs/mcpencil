@@ -42,7 +42,7 @@ The answer matcher additionally handles case, punctuation, repeated spacing, acc
 
 ## Production deck balance
 
-The production deck contains 174 server-side single-word noun cards. Practice Pair draws from 139 vetted easy/medium cards, preventing the tiny-pool repetition that made separate practice matches feel identical while keeping the judge path legible. Both modes deal without replacement inside a match.
+The production deck contains 174 server-side single-word noun cards. Sketch Duet draws from 139 vetted easy/medium cards, preventing the tiny-pool repetition that made separate duet matches feel identical while keeping the judge path legible. Every mode deals without replacement inside a match.
 
 Every canonical answer and accepted alias is normalized-unique and tested as correct. Every card also carries at least two rejected near-misses that are tested as incorrect. For example, `rabbit` accepts `bunny`, while related drawings or broad guesses such as `cat` and `hamster` do not count.
 

@@ -33,7 +33,7 @@ async function body<T>(response: Response): Promise<T> {
 }
 
 async function createRoom(
-  mode: "practice" | "arena" | "exhibition",
+  mode: "practice" | "arena" | "free-for-all",
   name = "Test Human",
 ): Promise<JoinRoomResponse> {
   const response = await request("/api/rooms", {
@@ -137,7 +137,7 @@ function assertPromptAbsent(value: unknown, secret?: string): void {
   }
 }
 
-describe("Practice Pair HTTP journey", () => {
+describe("Sketch Duet HTTP journey", () => {
   it("keeps two identities separate and completes both WebMCP directions", async () => {
     const human = await createRoom("practice", "Human Artist");
     expect(human.snapshot).toMatchObject({
@@ -404,19 +404,19 @@ describe("Durable room authority", () => {
       totalRounds: 2,
       roundDurationMs: 90_000,
     });
-    const exhibition = await createRoom("exhibition", "Exhibition Settings Host");
-    expect(exhibition.snapshot).toMatchObject({
-      totalRounds: 6,
+    const freeForAll = await createRoom("free-for-all", "FFA Settings Host");
+    expect(freeForAll.snapshot).toMatchObject({
+      totalRounds: 1,
       roundDurationMs: 90_000,
     });
-    expect((await command(exhibition, {
+    expect((await command(freeForAll, {
       type: "configure_match",
-      totalRounds: 4,
+      totalRounds: 1,
       roundDurationMs: 60_000,
       origin: "human-ui",
     })).status).toBe(200);
-    expect(await state(exhibition)).toMatchObject({
-      totalRounds: 4,
+    expect(await state(freeForAll)).toMatchObject({
+      totalRounds: 1,
       roundDurationMs: 60_000,
     });
 
@@ -514,7 +514,7 @@ describe("Durable room authority", () => {
     });
   });
 
-  it("accepts Practice Pair options, uses the configured clock, and rejects changes after start", async () => {
+  it("keeps Sketch Duet one-human/one-agent while honoring its configured clock", async () => {
     const human = await createRoom("practice", "Clock Host");
     const configure = await command(human, {
       type: "configure_match",
@@ -537,6 +537,20 @@ describe("Durable room authority", () => {
     });
 
     const agent = await joinRoom(human.roomCode, "Clock Agent", "cobalt", "agent");
+    const duplicateController = await command(human, {
+      type: "configure_seat",
+      team: "cobalt",
+      controller: "agent",
+    });
+    expect(duplicateController.status).toBe(409);
+    expect(await body<ApiFailure>(duplicateController)).toMatchObject({
+      code: "PRACTICE_PARTNER_REQUIRED",
+    });
+    expect((await state(human)).seats.map((seat) => seat.controller).sort()).toEqual([
+      "agent",
+      "human",
+    ]);
+
     await connectPractice(human, agent);
     const started = await state(agent);
     expect(started).toMatchObject({
@@ -852,6 +866,127 @@ describe("Durable room authority", () => {
     expect(ended.scores.cobalt).toBeGreaterThanOrEqual(100);
     expect(ended.scores.coral).toBe(0);
   });
+
+  it("runs a Free-for-All with one artist turn per player and individual scoring", async () => {
+    const host = await createRoom("free-for-all", "Free Host");
+    const second = await joinRoom(host.roomCode, "Second Sketcher");
+    const firstSockets = await Promise.all([host, second].map(connectSeat));
+    for (const player of [host, second]) {
+      expect((await command(player, {
+        type: "ready_up",
+        ready: true,
+        origin: "human-ui",
+      })).status).toBe(200);
+    }
+    const tooSoon = await command(host, { type: "start_match", origin: "human-ui" });
+    expect(tooSoon.status).toBe(409);
+    expect(await body<ApiFailure>(tooSoon)).toMatchObject({ code: "PLAYERS_INCOMPLETE" });
+
+    const third = await joinRoom(host.roomCode, "Third Sketcher");
+    const thirdSocket = await connectSeat(third);
+    expect((await command(third, {
+      type: "ready_up",
+      ready: true,
+      origin: "human-ui",
+    })).status).toBe(200);
+    expect(await state(host)).toMatchObject({ mode: "free-for-all", totalRounds: 3 });
+    expect((await command(host, { type: "start_match", origin: "human-ui" })).status).toBe(200);
+
+    const players = [host, second, third];
+    const credentialsBySeat = new Map(players.map((player) => [player.seatId, player]));
+    const expectedScores = new Map(players.map((player) => [player.seatId, 0]));
+    const artists = new Set<string>();
+    const prompts = new Set<string>();
+
+    for (let roundIndex = 0; roundIndex < players.length; roundIndex += 1) {
+      const prepared = await state(host);
+      expect(prepared).toMatchObject({
+        mode: "free-for-all",
+        phase: "round-prep",
+        roundIndex,
+        totalRounds: players.length,
+      });
+      const artistSeatId = prepared.artistSeatId;
+      expect(artistSeatId).not.toBeNull();
+      expect(artists.has(artistSeatId!)).toBe(false);
+      artists.add(artistSeatId!);
+      const artist = credentialsBySeat.get(artistSeatId!);
+      expect(artist).toBeDefined();
+      const card = await body<PrivatePrompt>(await prompt(artist!));
+      expect(prompts.has(card.prompt)).toBe(false);
+      prompts.add(card.prompt);
+
+      expect((await command(artist!, {
+        type: "draw_batch",
+        expectedVersion: prepared.canvasVersion,
+        idempotencyKey: `ffa-stroke-${roundIndex}`,
+        primitives: [oneLine],
+        origin: "human-ui",
+      })).status).toBe(200);
+
+      if (roundIndex === 0) {
+        const selfGuess = await command(artist!, {
+          type: "submit_guess",
+          guess: card.prompt,
+          origin: "human-ui",
+        });
+        expect(selfGuess.status).toBe(403);
+        expect(await body<ApiFailure>(selfGuess)).toMatchObject({ code: "NOT_GUESSER" });
+      }
+
+      const artistPlayerIndex = players.findIndex((player) => player.seatId === artistSeatId);
+      const guesser = players[(artistPlayerIndex + 1) % players.length]!;
+      const guessResponse = await command(guesser, {
+        type: "submit_guess",
+        guess: card.prompt,
+        origin: "human-ui",
+      });
+      expect(guessResponse.status).toBe(200);
+      const guessResult = await body<CommandResult>(guessResponse);
+      expect(guessResult).toMatchObject({ correct: true });
+      const award = guessResult.pointsAwarded ?? 0;
+      expect(award).toBeGreaterThanOrEqual(100);
+      expectedScores.set(artistSeatId!, expectedScores.get(artistSeatId!)! + award);
+      expectedScores.set(guesser.seatId, expectedScores.get(guesser.seatId)! + award);
+
+      const ended = await state(host);
+      expect(ended.roundResult).toMatchObject({
+        artistSeatId,
+        guessedBySeatId: guesser.seatId,
+        pointsAwarded: award,
+        artistPointsAwarded: award,
+        guesserPointsAwarded: award,
+      });
+      for (const standing of ended.leaderboard ?? []) {
+        expect(standing.score).toBe(expectedScores.get(standing.seatId));
+      }
+
+      for (const player of players) {
+        expect((await command(player, {
+          type: "ready_next",
+          expectedRoundIndex: roundIndex,
+          origin: "human-ui",
+        })).status).toBe(200);
+      }
+      await fireReadyResultDeadline(host, roundIndex);
+    }
+
+    const complete = await state(host);
+    expect(complete).toMatchObject({ phase: "match-end", totalRounds: 3 });
+    expect(artists).toEqual(new Set(players.map((player) => player.seatId)));
+    expect(prompts).toHaveLength(3);
+    expect(complete.scores).toEqual({ cobalt: 0, coral: 0 });
+    expect(complete.leaderboard).toHaveLength(3);
+    for (const standing of complete.leaderboard ?? []) {
+      expect(standing.score).toBe(expectedScores.get(standing.seatId));
+      const sameScore = complete.leaderboard?.find(
+        (candidate) => candidate.seatId !== standing.seatId && candidate.score === standing.score,
+      );
+      if (sameScore) expect(sameScore.placement).toBe(standing.placement);
+    }
+    void firstSockets;
+    void thirdSocket;
+  }, 180_000);
 
   it("uses six different prompts across a complete arena match", async () => {
     const host = await createRoom("arena", "Deck Host");

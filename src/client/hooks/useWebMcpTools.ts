@@ -361,8 +361,8 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     definitions.push(
       tool({
         name: "start_practice",
-        title: "Start agent practice",
-        description: "Open a balanced Practice Pair room with this browser agent seated as the first player. The host can configure rounds and drawing time in the lobby.",
+        title: "Start Sketch Duet",
+        description: "Open a cooperative Sketch Duet room with this browser agent seated as the first player. The host can configure rounds and drawing time in the lobby.",
         inputSchema: {
           type: "object", properties: { name: { type: "string", minLength: 1, maxLength: 24, description: "Your display name." } },
           required: ["name"], additionalProperties: false,
@@ -391,7 +391,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
           properties: {
             roomCode: { type: "string", pattern: "^[A-Z2-9]{5}$", description: "Optional when the current page identifies a room." },
             name: { type: "string", minLength: 1, maxLength: 24, description: "Optional display name. A unique agent name is generated when omitted." },
-            team: { type: "string", enum: ["cobalt", "coral"] },
+            team: { type: "string", enum: ["cobalt", "coral"], description: "Optional Team Match side; ignored in Sketch Duet and Free-for-All." },
           },
           additionalProperties: false,
         },
@@ -440,11 +440,11 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   definitions.push(tool({
     name: "configure_match",
     title: "Configure MCPencil match",
-    description: "Set the lobby's total rounds and drawing time. Use only when the user asks to change game settings. Practice supports 2, 4, or 6 rounds; team modes support 4, 6, or 8. Drawing time supports 45, 60, or 90 seconds. Only the agent host can call this before play begins.",
+    description: "Set lobby match options only when the user asks. Sketch Duet supports 2, 4, or 6 rounds; Team Match supports 4, 6, or 8. Free-for-All automatically uses one round per player, so send the current totalRounds unchanged and configure only drawing time. Drawing time supports 45, 60, or 90 seconds. Only the agent host can call this before play begins.",
     inputSchema: {
       type: "object",
       properties: {
-        totalRounds: { type: "integer", enum: [2, 4, 6, 8], description: "Even total rounds; allowed values depend on the room mode." },
+        totalRounds: { type: "integer", minimum: 1, maximum: 8, description: "Sketch Duet: 2/4/6. Team Match: 4/6/8. Free-for-All: copy the current automatic player-count value unchanged." },
         roundDurationMs: { type: "integer", enum: [...ROUND_DURATION_OPTIONS_MS], description: "Drawing time per round in milliseconds." },
       },
       required: ["totalRounds", "roundDurationMs"],
@@ -459,21 +459,24 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       const roundOptions: readonly number[] = activeSnapshot.mode === "practice"
         ? PRACTICE_ROUND_OPTIONS
         : ARENA_ROUND_OPTIONS;
-      if (!roundOptions.includes(parsed.totalRounds)) {
-        throw new Error(`${activeSnapshot.mode === "practice" ? "Practice" : "Team modes"} allow ${roundOptions.join(", ")} rounds.`);
+      if (activeSnapshot.mode !== "free-for-all" && !roundOptions.includes(parsed.totalRounds)) {
+        throw new Error(`${activeSnapshot.mode === "practice" ? "Sketch Duet" : "Team Match"} allows ${roundOptions.join(", ")} rounds.`);
       }
       if (!(ROUND_DURATION_OPTIONS_MS as readonly number[]).includes(parsed.roundDurationMs)) {
         throw new Error("Round time must be 45, 60, or 90 seconds.");
       }
+      const totalRounds = activeSnapshot.mode === "free-for-all"
+        ? activeSnapshot.totalRounds
+        : parsed.totalRounds;
       const result = await actionsRef.current.command({
         type: "configure_match",
-        totalRounds: parsed.totalRounds,
+        totalRounds,
         roundDurationMs: parsed.roundDurationMs,
         origin: "webmcp",
       }, signal);
       return {
         ...result,
-        matchSettings: parsed,
+        matchSettings: { totalRounds, roundDurationMs: parsed.roundDurationMs },
         mustContinue: true,
         nextAction: { tool: "get_match_state", arguments: {}, instruction: "Confirm the synchronized lobby settings and continue preparing the match." },
       };
@@ -481,7 +484,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   }));
 
   definitions.push(tool({
-    name: "start_match", title: "Start MCPencil match", description: "Start once both teams have two live, ready players. Agent seats are ready automatically.",
+    name: "start_match", title: "Start MCPencil match", description: "Start when the current mode's roster is complete and ready: two players per team in Team Match, or 3–8 total players in Free-for-All. Agent seats are ready automatically.",
     inputSchema: EmptySchema,
     execute: (input, options) => run("start_match", input, options?.signal, async (signal) => {
       const result = await actionsRef.current.command({ type: "start_match", origin: "webmcp" }, signal);
@@ -621,7 +624,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   {
     definitions.push(tool({
       name: "get_round_result", title: "Read round result",
-      description: "Read the most recently completed round's revealed prompt, outcome, timing, strokes, and tool usage. Practice results are explicitly collaborative and never report a team winner or competitive score. This remains available during the following round.",
+      description: "Read the most recently completed round's revealed prompt, outcome, timing, strokes, and tool usage. Sketch Duet results are collaborative; Team Match awards a team; Free-for-All awards the artist and first solver independently. This remains available during the following round.",
       inputSchema: EmptySchema, annotations: { readOnlyHint: true, untrustedContentHint: true },
       execute: (input, options) => run("get_round_result", input, options?.signal, () => {
         const currentSnapshot = snapshotRef.current;
