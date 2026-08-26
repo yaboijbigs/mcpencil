@@ -29,8 +29,8 @@ Record the release commit and result:
 
 | Field | Result |
 |---|---|
-| Commit SHA | `a670d99a9db2a3b94e97b35cce00df4389c2c3c1` |
-| UTC timestamp | `2026-08-26T03:55:32Z` |
+| Commit SHA | `99adb2e9cab3aa1b7d438a756246a62cbd59ba8c` |
+| UTC timestamp | `2026-08-26T04:05:50Z` |
 | Node/npm | `v24.15.0` / `11.12.1` |
 | Tests | 48/48 passed across 4 Cloudflare Vitest files |
 | Typecheck | Passed (`tsc -b`) |
