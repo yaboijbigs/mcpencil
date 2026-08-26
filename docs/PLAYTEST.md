@@ -42,7 +42,7 @@ Use a clean browser profile and the production domain.
 
 - [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
-- [ ] Human creates Practice Pair and remains in a one-seat lobby until the agent calls `join_match` and connects with a separate opaque identity.
+- [ ] Human creates Practice Pair, copies **Invite an AI player** into a fresh no-context agent conversation, and remains in a one-seat lobby until the agent calls `play_mcpencil` and connects with a separate opaque identity.
 - [ ] Round one assigns the companion agent as artist and the human as guesser.
 - [ ] Only agent-artist tools are registered; the prompt event is masked in the Lens.
 - [ ] Three or more `draw_stroke` calls each persist, broadcast, render, and acknowledge separately; no multi-stroke burst appears.

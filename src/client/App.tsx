@@ -30,10 +30,12 @@ import { useGameSound } from "./hooks/useGameSound";
 import { useRoomSession } from "./hooks/useRoomSession";
 import { useWebMcpTools } from "./hooks/useWebMcpTools";
 
+type InviteAudience = "person" | "agent";
+
 export function App() {
   const session = useRoomSession();
   const sound = useGameSound();
-  const [copied, setCopied] = useState(false);
+  const [copiedInvite, setCopiedInvite] = useState<InviteAudience | null>(null);
   const [actionBusy, setActionBusy] = useState(false);
   const [hiddenPracticePrompt, setHiddenPracticePrompt] = useState<string | null>(null);
   const primarySeat = session.snapshot?.seats.find(
@@ -46,14 +48,13 @@ export function App() {
   );
   const joinForAgent = useCallback(
     async (input: { roomCode: string; name: string; team?: TeamId; controller: ControllerType }) => {
-      const joiningHostedPractice = session.snapshot?.mode === "practice"
-        && session.snapshot.phase === "lobby"
-        && session.credentials?.roomCode === input.roomCode
+      const joiningHostedRoom = session.snapshot?.phase === "lobby"
+        && session.credentials?.roomCode === input.roomCode.trim().toUpperCase()
         && primarySeat?.controller === "human";
-      const join = joiningHostedPractice ? session.joinAgent : session.join;
+      const join = joiningHostedRoom ? session.joinAgent : session.join;
       return join(input.roomCode, { name: input.name, team: input.team, controller: input.controller });
     },
-    [primarySeat?.controller, session.credentials?.roomCode, session.join, session.joinAgent, session.snapshot?.mode, session.snapshot?.phase],
+    [primarySeat?.controller, session.credentials?.roomCode, session.join, session.joinAgent, session.snapshot?.phase],
   );
 
   const toolSeatId = session.companion?.seatId
@@ -70,6 +71,7 @@ export function App() {
   const webmcp = useWebMcpTools({
     snapshot: session.snapshot,
     seatId: toolSeatId,
+    enabled: session.credentials === null || session.snapshot !== null,
     guessesEnabled: practicePromptGate !== "required",
     command: session.agentCommand,
     privatePrompt: session.agentPrivatePrompt,
@@ -77,14 +79,26 @@ export function App() {
     joinMatch: joinForAgent,
   });
 
-  const copyInvite = useCallback(async () => {
+  const copyInvite = useCallback(async (audience: InviteAudience) => {
     const code = session.snapshot?.roomCode;
     if (!code) return;
-    const url = new URL(window.location.href);
+    const url = new URL(window.location.pathname, window.location.origin);
     url.searchParams.set("room", code);
-    await navigator.clipboard.writeText(url.toString());
-    setCopied(true);
-    window.setTimeout(() => setCopied(false), 1600);
+
+    let clipboardText = url.toString();
+    if (audience === "agent") {
+      url.searchParams.set("invite", "agent");
+      clipboardText = [
+        `Play MCPencil with me: ${url.toString()}`,
+        "Open the link and immediately call the page's play_mcpencil WebMCP tool. Opening the page alone does not join the game. Keep following each returned nextAction until the match ends.",
+      ].join("\n\n");
+    }
+
+    await navigator.clipboard.writeText(clipboardText);
+    setCopiedInvite(audience);
+    window.setTimeout(() => {
+      setCopiedInvite((current) => current === audience ? null : current);
+    }, 1600);
   }, [session.snapshot?.roomCode]);
 
   const act = useCallback(async (work: () => Promise<unknown>) => {
@@ -104,9 +118,9 @@ export function App() {
       <AppHeader
         snapshot={session.snapshot}
         connected={session.connected}
-        copied={copied}
+        copied={copiedInvite === "person"}
         soundEnabled={sound.enabled}
-        onCopy={() => void copyInvite()}
+        onCopy={() => void copyInvite("person")}
         onToggleSound={sound.toggle}
         onLeave={session.leave}
       />
@@ -125,7 +139,8 @@ export function App() {
           busy={actionBusy}
           lens={<WebMcpLens supported={webmcp.supported} tools={webmcp.toolNames} invocations={webmcp.invocations} activity={session.snapshot.activity} />}
           onCommand={(command) => act(() => session.command(command))}
-          onCopy={() => void copyInvite()}
+          copiedInvite={copiedInvite}
+          onCopyInvite={(audience) => void copyInvite(audience)}
         />
       ) : (
         <GameRoom
@@ -184,7 +199,7 @@ function AppHeader({
       </a>
       <div className="topbar-center">
         {snapshot ? <>
-          <button className="room-chip" type="button" onClick={onCopy} title="Copy invite link">
+          <button className="room-chip" type="button" onClick={onCopy} title="Copy person invite link" aria-label={`Copy person invite link for room ${snapshot.roomCode}`}>
             <small>ROOM</small><strong>{snapshot.roomCode}</strong>{copied ? <CheckIcon /> : <CopyIcon />}
           </button>
           <span className={`connection-chip ${connected ? "online" : "reconnecting"}`}><span />{connected ? "Live" : "Reconnecting"}</span>
@@ -210,10 +225,13 @@ function Landing({
   lens: React.ReactNode;
 }) {
   const roomFromUrl = new URLSearchParams(window.location.search).get("room")?.toUpperCase() ?? "";
+  const hasValidRoomInvite = /^[A-Z2-9]{5}$/.test(roomFromUrl);
+  const isAgentInvite = hasValidRoomInvite
+    && new URLSearchParams(window.location.search).get("invite") === "agent";
   const [tab, setTab] = useState<"practice" | "arena" | "join">(roomFromUrl ? "join" : "practice");
   const [name, setName] = useState("");
   const [roomCode, setRoomCode] = useState(roomFromUrl);
-  const [controller, setController] = useState<ControllerType>("human");
+  const [controller, setController] = useState<ControllerType>(isAgentInvite ? "agent" : "human");
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -223,6 +241,16 @@ function Landing({
 
   return (
     <main className="landing-page">
+      {isAgentInvite ? (
+        <section className="agent-invite-alert" role="alert" aria-labelledby="agent-invite-title">
+          <span className="agent-invite-icon" aria-hidden="true"><BotIcon /></span>
+          <div>
+            <span className="eyebrow">AI player invitation · Room {roomFromUrl}</span>
+            <h2 id="agent-invite-title">Opening this page does not join the match.</h2>
+            <p>Use WebMCP now: call <code>play_mcpencil</code>, then follow every returned <code>nextAction</code> until the match ends.</p>
+          </div>
+        </section>
+      ) : null}
       <section className="hero-grid">
         <div className="hero-copy">
           <div className="hero-kicker"><SparkIcon /> A party game built for people + agents</div>
@@ -290,13 +318,14 @@ function HeroSketch() {
   );
 }
 
-function Lobby({ snapshot, seatId, busy, lens, onCommand, onCopy }: {
+function Lobby({ snapshot, seatId, busy, lens, onCommand, copiedInvite, onCopyInvite }: {
   snapshot: RoomSnapshot;
   seatId: string;
   busy: boolean;
   lens: React.ReactNode;
   onCommand(command: Parameters<ReturnType<typeof useRoomSession>["command"]>[0]): Promise<unknown>;
-  onCopy(): void;
+  copiedInvite: InviteAudience | null;
+  onCopyInvite(audience: InviteAudience): void;
 }) {
   const self = snapshot.seats.find((seat) => seat.id === seatId);
   const teams: TeamId[] = ["cobalt", "coral"];
@@ -309,12 +338,12 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, onCopy }: {
 
   if (snapshot.mode === "practice") {
     return <main className="lobby-page practice-lobby">
-      <section className="lobby-heading"><div><span className="eyebrow">Practice Pair</span><h1>Invite your browser agent.</h1><p>The room starts automatically after a separate agent seat joins through WebMCP.</p></div><button className="invite-card" type="button" onClick={onCopy}><small>Give this room to your agent</small><strong>{snapshot.roomCode}</strong><span><CopyIcon /> Copy link</span></button></section>
+      <section className="lobby-heading"><div><span className="eyebrow">Practice Pair</span><h1>Invite your browser agent.</h1><p>The room starts automatically after a separate agent seat joins through WebMCP.</p></div><InviteCard roomCode={snapshot.roomCode} copiedInvite={copiedInvite} onCopyInvite={onCopyInvite} /></section>
       <div className="practice-lobby-grid">
         <section className="practice-duo-card">
           {snapshot.seats.map((seat, index) => <div className="practice-player" key={seat.id}><span className={`avatar ${seat.controller}`}>{seat.controller === "agent" ? <BotIcon /> : seat.name.slice(0, 1).toUpperCase()}</span><div><small>{seat.controller === "agent" ? "BROWSER AGENT" : "HUMAN PLAYER"}</small><strong>{seat.name}{seat.id === seatId ? " (you)" : ""}</strong><span><CheckIcon /> Ready</span></div>{index === 0 ? <b>↔</b> : null}</div>)}
           <div className="practice-explainer"><SparkIcon /><p><strong>Round one:</strong> your agent draws and you guess.<br /><strong>Round two:</strong> you draw and your agent guesses.</p></div>
-          <p className="waiting-host"><span className="pulse-dot" />{enoughPlayers ? "Agent joined — opening the first round…" : "Waiting for an agent to call join_match…"}</p>
+          <p className="waiting-host"><span className="pulse-dot" />{enoughPlayers ? "Agent joined — opening the first round…" : "Waiting for an agent to call play_mcpencil…"}</p>
         </section>
         <aside className="lobby-controls">{lens}</aside>
       </div>
@@ -325,7 +354,7 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, onCopy }: {
     <main className="lobby-page">
       <section className="lobby-heading">
         <div><span className="eyebrow">Team Arena</span><h1>Assemble your sketch squad.</h1><p>Mix humans and agents freely. The same rules—and the same canvas—apply to everyone.</p></div>
-        <button className="invite-card" type="button" onClick={onCopy}><small>Invite players with room code</small><strong>{snapshot.roomCode}</strong><span><CopyIcon /> Copy link</span></button>
+        <InviteCard roomCode={snapshot.roomCode} copiedInvite={copiedInvite} onCopyInvite={onCopyInvite} />
       </section>
 
       <div className="lobby-content">
@@ -351,6 +380,27 @@ function Lobby({ snapshot, seatId, busy, lens, onCommand, onCopy }: {
       </div>
     </main>
   );
+}
+
+function InviteCard({ roomCode, copiedInvite, onCopyInvite }: {
+  roomCode: string;
+  copiedInvite: InviteAudience | null;
+  onCopyInvite(audience: InviteAudience): void;
+}) {
+  return <section className="invite-card" aria-label={`Invite players to room ${roomCode}`}>
+    <small>Share room</small>
+    <strong>{roomCode}</strong>
+    <div className="invite-actions">
+      <button type="button" onClick={() => onCopyInvite("person")}>
+        {copiedInvite === "person" ? <CheckIcon /> : <PeopleIcon />}
+        <span>{copiedInvite === "person" ? "Person link copied" : "Invite a person"}</span>
+      </button>
+      <button className="agent-invite-button" type="button" onClick={() => onCopyInvite("agent")}>
+        {copiedInvite === "agent" ? <CheckIcon /> : <BotIcon />}
+        <span>{copiedInvite === "agent" ? "AI prompt copied" : "Invite an AI player"}</span>
+      </button>
+    </div>
+  </section>;
 }
 
 function SeatCard({ seat, isSelf }: { seat: RoomSnapshot["seats"][number]; isSelf: boolean }) {

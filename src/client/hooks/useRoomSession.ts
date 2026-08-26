@@ -155,7 +155,7 @@ export function useRoomSession(): RoomSession {
     async (roomCode, input) => {
       const primary = credentialsRef.current;
       if (!primary || primary.roomCode !== roomCode.trim().toUpperCase()) {
-        throw new ApiError("Open the matching Practice Pair first.", "practice_host_missing", 409);
+        throw new ApiError("Open the matching room as its human host first.", "room_host_missing", 409);
       }
       setLoading(true);
       try {
@@ -172,7 +172,7 @@ export function useRoomSession(): RoomSession {
         setError(null);
         return response;
       } catch (reason) {
-        setError(reason instanceof Error ? reason.message : "Could not join the agent to practice.");
+        setError(reason instanceof Error ? reason.message : "Could not join the agent to this room.");
         throw reason;
       } finally {
         setLoading(false);

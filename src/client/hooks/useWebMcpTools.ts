@@ -28,6 +28,7 @@ export interface LensInvocation {
 interface UseWebMcpToolsOptions {
   snapshot: RoomSnapshot | null;
   seatId: string | null;
+  enabled?: boolean;
   guessesEnabled?: boolean;
   command(command: RoomCommand, signal?: AbortSignal): Promise<CommandResult>;
   privatePrompt(signal?: AbortSignal): Promise<PrivatePrompt>;
@@ -106,7 +107,7 @@ interface StateWaiter {
   reject: (reason: unknown) => void;
 }
 
-export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, command, privatePrompt, startPractice, joinMatch }: UseWebMcpToolsOptions) {
+export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnabled = true, command, privatePrompt, startPractice, joinMatch }: UseWebMcpToolsOptions) {
   const supported = Boolean(document.modelContext);
   const [invocations, setInvocations] = useState<LensInvocation[]>([]);
   const [registeredToolNames, setRegisteredToolNames] = useState<Set<string>>(() => new Set());
@@ -133,6 +134,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   const stateWaitersRef = useRef(new Set<StateWaiter>());
   const privatePromptCacheRef = useRef(new Map<string, Promise<PrivatePrompt>>());
   const drawStrokeChainRef = useRef<Promise<void>>(Promise.resolve());
+  const roomInviteCode = roomCodeFromUrl();
 
   const settleStateWaiter = (waiter: StateWaiter, value: RoomSnapshot | null, reason?: unknown) => {
     if (!stateWaitersRef.current.delete(waiter)) return;
@@ -209,13 +211,13 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   };
 
   const toolNames = useMemo(() => {
-    if (!supported) return [];
-    const names = webMcpToolNames(snapshot, seatId, guessesEnabled);
+    if (!supported || !enabled) return [];
+    const names = webMcpToolNames(snapshot, seatId, guessesEnabled, roomInviteCode);
     const readyNextKey = snapshot ? `${snapshot.roomCode}:${snapshot.roundIndex}` : null;
     return readyNextKey === consumedReadyNextKey
       ? names.filter((name) => name !== "ready_next")
       : names;
-  }, [consumedReadyNextKey, guessesEnabled, seatId, snapshot, supported]);
+  }, [consumedReadyNextKey, enabled, guessesEnabled, roomInviteCode, seatId, snapshot, supported]);
   const availabilityKey = toolNames.join(":");
   const availableToolsRef = useRef(new Set<string>());
   availableToolsRef.current = new Set(toolNames);
@@ -357,7 +359,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     tool({
       name: "get_match_state",
       title: "Inspect MCPencil match",
-      description: "Canonical turn tool. Read role, structured nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between actions, pass afterRevision and waitMs 25000 so the next WebSocket update wakes this call. Guessers also receive compact canvasGeometry and recentGuesses.",
+      description: "Canonical continuation tool. Before joining, it directs an invited agent to play_mcpencil; opening the page alone is not success. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between actions, pass afterRevision and waitMs 25000 so the next WebSocket update wakes this call. Guessers also receive compact canvasGeometry and recentGuesses.",
       inputSchema: {
         type: "object",
         properties: {
@@ -375,7 +377,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
             : await waitForRevision(parsed.afterRevision, parsed.waitMs ?? 0, signal);
           const currentSeatId = seatIdRef.current;
           const state = {
-            ...compactWebMcpState(currentSnapshot, currentSeatId),
+            ...compactWebMcpState(currentSnapshot, currentSeatId, roomInviteCode),
             ...(parsed.afterRevision !== undefined && currentSnapshot?.revision === parsed.afterRevision
               ? { waitTimedOut: true }
               : {}),
@@ -412,48 +414,50 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         execute: (input, options) => run("start_practice", input, options?.signal, async () => {
           const name = z.string().trim().min(1).max(24).parse(input.name);
           await actionsRef.current.startPractice(name);
-          return { accepted: true, next: "Call get_match_state." };
+          return {
+            accepted: true,
+            mustContinue: true,
+            nextAction: { tool: "get_match_state", arguments: {}, instruction: "Read the new room state and continue until match-end." },
+          };
         }),
       }),
     );
   }
 
-  if (availableTools.has("join_match")) {
+  if (availableTools.has("play_mcpencil")) {
     definitions.push(
       tool({
-        name: "join_match",
-        title: "Join MCPencil room",
-        description: "Join the current invite or waiting Practice Pair. Only name is required when the page already identifies a room; controller defaults to agent. Otherwise provide a five-character roomCode.",
+        name: "play_mcpencil",
+        title: "Join and play MCPencil now",
+        description: "Use this immediately when the user says 'play me', 'join me', asks you to play MCPencil, or sends or opens an MCPencil room URL. Opening the page alone is NOT success. Call with no arguments to join the room in the current URL as an AI player and ready automatically, then follow every exact nextAction until phase is match-end.",
         inputSchema: {
           type: "object",
           properties: {
             roomCode: { type: "string", pattern: "^[A-Z2-9]{5}$", description: "Optional when the current page identifies a room." },
-            name: { type: "string", minLength: 1, maxLength: 24 },
+            name: { type: "string", minLength: 1, maxLength: 24, description: "Optional display name. A unique agent name is generated when omitted." },
             team: { type: "string", enum: ["cobalt", "coral"] },
-            controller: { type: "string", enum: ["human", "agent"], description: "Optional; defaults to agent." },
           },
-          required: ["name"],
           additionalProperties: false,
         },
         annotations: { untrustedContentHint: true },
-        execute: (input, options) => run("join_match", input, options?.signal, async (signal) => {
+        execute: (input, options) => run("play_mcpencil", input, options?.signal, async (signal) => {
           const parsed = z.object({
             roomCode: z.string().trim().toUpperCase().regex(/^[A-Z2-9]{5}$/).optional(),
-            name: z.string().trim().min(1).max(24),
+            name: z.string().trim().min(1).max(24).optional(),
             team: z.enum(["cobalt", "coral"]).optional(),
-            controller: z.enum(["human", "agent"]).optional(),
           }).strict().parse(input);
           const currentLobbyCode = snapshotRef.current?.phase === "lobby"
             ? snapshotRef.current.roomCode
             : null;
           const roomCode = parsed.roomCode ?? currentLobbyCode ?? roomCodeFromUrl();
           if (!roomCode) throw new Error("roomCode is required when the page URL has no valid ?room= code.");
-          const controller = parsed.controller ?? "agent";
-          const response = await actionsRef.current.joinMatch({ ...parsed, roomCode, controller });
+          const name = parsed.name ?? defaultAgentName();
+          const controller = "agent";
+          const response = await actionsRef.current.joinMatch({ ...parsed, roomCode, name, controller });
           const joinedSnapshot = response?.snapshot
             ?? (snapshotRef.current?.roomCode === roomCode ? snapshotRef.current : null);
           const joinedSeatId = response?.seatId ?? seatIdRef.current;
-          let state: Record<string, unknown> = compactWebMcpState(joinedSnapshot, joinedSeatId);
+          let state: Record<string, unknown> = compactWebMcpState(joinedSnapshot, joinedSeatId, roomCode);
           if (response && isActiveAgentArtist(response.snapshot, response.seatId)) {
             const prompt = await cachedPrivatePrompt(response.snapshot, response.seatId, signal);
             state = {
@@ -464,11 +468,10 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
           }
           return {
             accepted: true,
-            roomCode,
+            status: "joined_and_ready",
+            displayName: name,
             controller,
-            revision: joinedSnapshot?.revision ?? null,
-            state,
-            next: "Act on state.nextAction immediately. Between turns, keep get_match_state pending with this revision as afterRevision and waitMs 25000.",
+            ...state,
           };
         }),
       }),
@@ -478,7 +481,14 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   if (availableTools.has("start_match")) definitions.push(tool({
     name: "start_match", title: "Start MCPencil match", description: "Start once both teams have two live, ready players. Agent seats are ready automatically.",
     inputSchema: EmptySchema,
-    execute: (input, options) => run("start_match", input, options?.signal, (signal) => actionsRef.current.command({ type: "start_match", origin: "webmcp" }, signal), compactCommand),
+    execute: (input, options) => run("start_match", input, options?.signal, async (signal) => {
+      const result = await actionsRef.current.command({ type: "start_match", origin: "webmcp" }, signal);
+      return {
+        ...result,
+        mustContinue: true,
+        nextAction: { tool: "get_match_state", arguments: {}, instruction: "Read your opening role immediately and continue until match-end." },
+      };
+    }, compactCommand),
   }));
 
   if (availableTools.has("draw_stroke")) {
@@ -509,6 +519,12 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
             const result = await actionsRef.current.command(payload, signal);
             return {
               ...result,
+              mustContinue: true,
+              nextAction: {
+                tool: "draw_stroke",
+                arguments: { expectedCanvasVersion: result.canvasVersion, primitive: "ONE_NEXT_PRIMITIVE" },
+                instruction: "Send the next high-information stroke immediately; do not narrate or pause to plan.",
+              },
               guidance: `Stroke visible. Immediately call draw_stroke again with ONE next stroke and expectedCanvasVersion ${result.canvasVersion}; do not narrate or pause to plan.`,
             };
           };
@@ -521,11 +537,22 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         name: "undo_last_stroke", title: "Undo your last stroke",
         description: "Remove your most recently accepted WebMCP stroke from this round, then resume drawing one stroke at a time.",
         inputSchema: { type: "object", properties: { expectedCanvasVersion: { type: "integer", minimum: 0, description: "Optional; defaults to the latest acknowledged canvasVersion." } }, additionalProperties: false },
-        execute: (input, options) => run("undo_last_stroke", input, options?.signal, (signal) => actionsRef.current.command({
-          type: "undo_draw_batch",
-          expectedVersion: z.number().int().min(0).optional().parse(input.expectedCanvasVersion) ?? versionRef.current,
-          origin: "webmcp",
-        }, signal), compactCommand),
+        execute: (input, options) => run("undo_last_stroke", input, options?.signal, async (signal) => {
+          const result = await actionsRef.current.command({
+            type: "undo_draw_batch",
+            expectedVersion: z.number().int().min(0).optional().parse(input.expectedCanvasVersion) ?? versionRef.current,
+            origin: "webmcp",
+          }, signal);
+          return {
+            ...result,
+            mustContinue: true,
+            nextAction: {
+              tool: "draw_stroke",
+              arguments: { expectedCanvasVersion: result.canvasVersion, primitive: "ONE_REPLACEMENT_PRIMITIVE" },
+              instruction: "Resume drawing now with one replacement stroke.",
+            },
+          };
+        }, compactCommand),
       }),
     );
   }
@@ -576,8 +603,16 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         revision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0,
         canvasVersion: lastResult?.canvasVersion ?? versionRef.current,
         remainingMs: lastResult?.remainingMs ?? remainingMs(snapshotRef.current),
+        mustContinue: true,
+        nextAction: correct
+          ? { tool: "get_match_state", arguments: {}, instruction: "The round ended; read the authoritative result and continue to the next round." }
+          : {
+              tool: "get_match_state",
+              arguments: { afterRevision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0, waitMs: 25_000 },
+              instruction: "Wait for newer geometry, inspect the whole canvas again, and continue guessing.",
+            },
         guidance: correct
-          ? "Correct."
+          ? "Correct. The round is over, but the match is not complete; continue with nextAction."
           : `All ${attempts.length} guesses were displayed. Wait for a newer canvasVersion, visually inspect the full rendered canvas again, then submit new candidates.`,
       };
     }, (output) => `${output.correct ? "Correct" : `${output.attempts.length} guesses displayed`}; canvas v${output.canvasVersion}`),
@@ -588,7 +623,16 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
       name: "get_round_result", title: "Read round result",
       description: "Read the most recently completed round's revealed prompt, winner, points, timing, strokes, and tool usage. This remains available during the following round.",
       inputSchema: EmptySchema, annotations: { readOnlyHint: true, untrustedContentHint: true },
-      execute: (input, options) => run("get_round_result", input, options?.signal, () => snapshotRef.current?.roundResult ?? { status: "No result" }, () => "Round result read"),
+      execute: (input, options) => run("get_round_result", input, options?.signal, () => {
+        const state = compactWebMcpState(snapshotRef.current, seatIdRef.current, roomInviteCode);
+        return {
+          result: snapshotRef.current?.roundResult ?? null,
+          phase: state.phase,
+          mustContinue: state.mustContinue,
+          completionCondition: state.completionCondition,
+          nextAction: state.nextAction,
+        };
+      }, () => "Round result read"),
     }));
   }
   if (availableTools.has("ready_next")) definitions.push(tool({
@@ -606,7 +650,12 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         }, signal);
         return {
           ...result,
-          next: "Call get_match_state with this revision as afterRevision and waitMs 25000. It will wake for round prep and include privatePrompt if you are the artist.",
+          mustContinue: true,
+          nextAction: {
+            tool: "get_match_state",
+            arguments: { afterRevision: result.revision, waitMs: 25_000 },
+            instruction: "Wait for round prep. The response includes privatePrompt when you become the artist.",
+          },
         };
       } catch (reason) {
         if (readyKey) setConsumedReadyNextKey((current) => current === readyKey ? null : current);
@@ -715,6 +764,10 @@ function remainingMs(snapshot: RoomSnapshot | null): number | null {
 function roomCodeFromUrl(): string | null {
   const value = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "";
   return /^[A-Z2-9]{5}$/.test(value) ? value : null;
+}
+
+function defaultAgentName() {
+  return `MCP Agent ${crypto.randomUUID().replaceAll("-", "").slice(0, 4).toUpperCase()}`;
 }
 
 function waitAtLeast(delayMs: number, signal: AbortSignal) {

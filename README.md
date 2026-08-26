@@ -15,8 +15,8 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 ## The 60-second judge path
 
 1. Open [mcpencil.com](https://mcpencil.com) in ChatGPT's in-app browser with **GPT-5.6 Sol or Terra** and choose **Practice Pair**.
-2. Ask: **“Join this practice and play both rounds with me. Use only the tools the page gives you.”**
-3. The human-created room waits in its lobby until the agent calls `join_match`; only then does Practice Pair begin.
+2. Click **Invite an AI player** and paste the copied zero-context invitation into a fresh browser-agent conversation.
+3. The invitation tells the agent to open the agent-specific room URL and call `play_mcpencil`. That zero-argument tool joins and readies the agent; only then does Practice Pair begin.
 4. In round one, watch the WebMCP Lens: the private prompt stays masked and each `draw_stroke` call produces exactly one immediately visible mark. Guess the picture in the game UI.
 5. In round two, memorize the private prompt and hide the card. Your first stroke starts the 90-second clock and registers `submit_guesses`; draw while the agent visually inspects each canvas update.
 6. Open the result and replay panels. Compare every guess, human/WebMCP provenance, time-to-guess, strokes, and tool calls.
@@ -40,6 +40,12 @@ human UI or WebMCP tool
 
 The collapsible **WebMCP Lens** makes this visible to judges: registered tools, role-driven tool changes, invocation timing, safe input summaries, compact results, canvas versions, and action provenance. Private prompts are represented only by masked events.
 
+### Zero-context invitations
+
+Every lobby has two deliberately different share actions. **Invite a person** copies the plain room URL. **Invite an AI player** copies a complete natural-language request plus an `invite=agent` deep link. The pasted request explicitly says that opening the page is not success, calls out `play_mcpencil`, and tells the agent to follow every returned `nextAction` through `match-end`.
+
+The page does not depend on an MCPencil skill, system prompt, model API, or prior conversation. The agent deep link reinforces the user's intent with a room-specific document title, a visible accessible alert, and a minimal initial WebMCP tool set. `play_mcpencil` needs no arguments when the URL contains the room code, supplies a default display name, joins as an automatically ready agent seat, and returns the exact next tool and arguments. Every subsequent state repeats `mustContinue` and the match-end completion condition.
+
 ## WebMCP tool contract
 
 Tools are registered imperatively with `document.modelContext.registerTool`. Per-tool `AbortController`s retire obsolete registrations as roles change, and the client confirms browser-side removal before registering a successor with the same name. In-flight acknowledgements remain safe through execution signals and server-side role/phase checks. Read tools use `readOnlyHint`; results containing player-authored names, guesses, or canvas geometry use `untrustedContentHint`.
@@ -48,7 +54,7 @@ Tools are registered imperatively with `document.modelContext.registerTool`. Per
 |---|---|---:|---|
 | `get_match_state` | Always | No | Returns a role-safe summary. An authenticated active agent artist also receives its private prompt so it can draw immediately; an eligible agent guesser receives compact canvas geometry and recent guesses. No other role receives either private prompt or guesser-only geometry. |
 | `start_practice` | Landing/practice | Yes | Creates the two-round agent-draws/human-draws judge path and joins the caller. |
-| `join_match` | Landing/practice | Yes | Joins a five-character room code with a display name, team preference, and human/agent controller label. |
+| `play_mcpencil` | Room invite/practice | Yes | Zero-context entry point. Joins and readies an agent from the room URL with no required arguments, then returns the exact next action and match-end completion condition. |
 | `start_match` | Lobby, host only | Yes | Starts an eligible match after server-side lobby validation. |
 | `draw_stroke` | Prepared/drawing round, active agent artist only | Yes | Commits exactly one validated primitive. The first stroke starts the 90-second clock; its acknowledgement supplies the next canvas version. |
 | `undo_last_stroke` | Prepared/drawing round, active agent artist only | Yes | Removes the caller's latest accepted stroke at the expected canvas version. |
@@ -62,7 +68,7 @@ Between turns, agents can long-poll `get_match_state` with the last `revision` a
 
 ## Game modes
 
-- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby and does not start a game. `join_match` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. The human-artist round remains private and untimed until the human's first stroke; the agent has no guess tool before it lands.
+- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby and does not start a game. `play_mcpencil` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. The human-artist round remains private and untimed until the human's first stroke; the agent has no guess tool before it lands.
 - **Team Arena:** two mixed teams of 2–4 seats play six 90-second rounds, alternating teams and rotating artists.
 - **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
 

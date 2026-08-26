@@ -240,8 +240,29 @@ describe("dynamic WebMCP availability", () => {
     expect(webMcpToolNames(null, null)).toEqual([
       "get_match_state",
       "start_practice",
-      "join_match",
+      "play_mcpencil",
     ]);
+  });
+
+  it("turns a room invite into an unambiguous zero-input play action", () => {
+    expect(webMcpToolNames(null, null, true, "AB2DE")).toEqual([
+      "get_match_state",
+      "play_mcpencil",
+    ]);
+    expect(compactWebMcpState(null, null, "AB2DE")).toMatchObject({
+      intent: "play_mcpencil_with_user",
+      roomCode: "AB2DE",
+      phase: "landing",
+      mustContinue: true,
+      completionCondition: expect.stringContaining("match-end"),
+      availableActions: ["play_mcpencil"],
+      nextAction: {
+        tool: "play_mcpencil",
+        arguments: {},
+        instruction: expect.stringContaining("Opening this page alone is not success"),
+      },
+      urgency: "immediate",
+    });
   });
 
   it("tracks agent controller, host, phase, and drawing role", () => {
@@ -273,7 +294,33 @@ describe("dynamic WebMCP availability", () => {
         isConnected: true,
       }],
     });
-    expect(webMcpToolNames(practiceLobby, null)).toEqual(["get_match_state", "join_match"]);
+    expect(webMcpToolNames(practiceLobby, null)).toEqual(["get_match_state", "play_mcpencil"]);
+  });
+
+  it("lets an agent join a human-hosted arena without replacing the host seat", () => {
+    const arenaLobby = snapshot({
+      phase: "lobby",
+      artistSeatId: null,
+      seats: [{
+        id: "human-host",
+        name: "Human Host",
+        team: "cobalt",
+        controller: "human",
+        isHost: true,
+        isReady: true,
+        isConnected: true,
+      }],
+    });
+    expect(webMcpToolNames(arenaLobby, null)).toEqual(["get_match_state", "play_mcpencil"]);
+    expect(compactWebMcpState(arenaLobby, null)).toMatchObject({
+      mustContinue: true,
+      nextAction: {
+        tool: "play_mcpencil",
+        arguments: {},
+        instruction: expect.stringContaining("not success"),
+      },
+      urgency: "immediate",
+    });
   });
 
   it("withholds submit_guesses until the human prompt is hidden", () => {
@@ -336,7 +383,7 @@ describe("dynamic WebMCP availability", () => {
       artistSeatId: null,
       seats: [humanHost],
     });
-    expect(webMcpToolNames(waiting, null)).toEqual(["get_match_state", "join_match"]);
+    expect(webMcpToolNames(waiting, null)).toEqual(["get_match_state", "play_mcpencil"]);
 
     const agentPrep = snapshot({
       mode: "practice",
@@ -351,6 +398,9 @@ describe("dynamic WebMCP availability", () => {
       "undo_last_stroke",
     ]);
     expect(compactWebMcpState(agentPrep, agent.id)).toMatchObject({
+      intent: "play_mcpencil_with_user",
+      mustContinue: true,
+      completionCondition: expect.stringContaining("match-end"),
       yourRole: "artist",
       nextAction: { tool: "draw_stroke" },
       urgency: "immediate",
@@ -396,6 +446,15 @@ describe("dynamic WebMCP availability", () => {
       "get_match_state",
       "get_round_result",
     ]);
+    expect(compactWebMcpState({ ...humanDrawing, phase: "match-end" }, agent.id)).toMatchObject({
+      phase: "match-end",
+      mustContinue: false,
+      nextAction: {
+        tool: null,
+        arguments: {},
+      },
+      urgency: "complete",
+    });
   });
 
   it("keeps the previous round result readable while the next artist draws", () => {

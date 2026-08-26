@@ -4,14 +4,19 @@ export function webMcpToolNames(
   snapshot: RoomSnapshot | null,
   seatId: string | null,
   guessesEnabled = true,
+  roomInviteCode: string | null = null,
 ): string[] {
   const names = ["get_match_state"];
-  if (snapshot === null) return [...names, "start_practice", "join_match"];
+  if (snapshot === null) {
+    return roomInviteCode
+      ? [...names, "play_mcpencil"]
+      : [...names, "start_practice", "play_mcpencil"];
+  }
 
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
   const hasAgentSeat = seat?.controller === "agent";
-  if (snapshot.phase === "lobby" && snapshot.mode === "practice" && !hasAgentSeat) {
-    names.push("join_match");
+  if (snapshot.phase === "lobby" && !hasAgentSeat) {
+    names.push("play_mcpencil");
   }
   if (snapshot.phase === "lobby" && snapshot.mode !== "practice" && hasAgentSeat) {
     if (seat.isHost) names.push("start_match");
@@ -29,18 +34,41 @@ export function webMcpToolNames(
   return names;
 }
 
-export function compactWebMcpState(snapshot: RoomSnapshot | null, seatId: string | null) {
-  if (!snapshot) return {
-    phase: "landing",
-    availableActions: ["start_practice", "join_match"],
-    nextAction: { tool: "join_match", instruction: "Join the room identified by the page URL." },
-    urgency: "immediate",
-    deadline: null,
-  };
+const PLAY_INTENT = "play_mcpencil_with_user";
+const COMPLETION_CONDITION = "Continue until phase is match-end. Opening the page, joining the room, or waiting in the lobby is not completion.";
+
+export function compactWebMcpState(
+  snapshot: RoomSnapshot | null,
+  seatId: string | null,
+  roomInviteCode: string | null = null,
+) {
+  if (!snapshot) {
+    const hasInvite = roomInviteCode !== null;
+    return {
+      intent: PLAY_INTENT,
+      roomCode: roomInviteCode,
+      phase: "landing",
+      mustContinue: true,
+      completionCondition: COMPLETION_CONDITION,
+      availableActions: hasInvite ? ["play_mcpencil"] : ["start_practice", "play_mcpencil"],
+      nextAction: {
+        tool: "play_mcpencil",
+        ...(hasInvite ? { arguments: {} } : {}),
+        instruction: hasInvite
+          ? "Call now with no arguments to join and ready as the user's AI player. Opening this page alone is not success."
+          : "Open an MCPencil room invite or provide its five-character roomCode, then join and play.",
+      },
+      urgency: "immediate",
+      deadline: null,
+    };
+  }
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
   const role = isArtist(snapshot, seatId) ? "artist" : canGuess(snapshot, seatId) ? "guesser" : "spectator";
   const action = compactNextAction(snapshot, seatId);
   const baseState = {
+    intent: PLAY_INTENT,
+    mustContinue: snapshot.phase !== "match-end",
+    completionCondition: COMPLETION_CONDITION,
     roomCode: snapshot.roomCode, mode: snapshot.mode, phase: snapshot.phase, round: snapshot.roundIndex + 1,
     totalRounds: snapshot.totalRounds, revision: snapshot.revision, yourSeatId: seatId,
     yourRole: role,
@@ -73,22 +101,50 @@ export function compactWebMcpState(snapshot: RoomSnapshot | null, seatId: string
 
 function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
+  if (snapshot.phase === "match-end") {
+    return {
+      nextAction: {
+        tool: null,
+        arguments: {},
+        instruction: "The match has ended. The play request is complete; report the outcome to the user.",
+      },
+      urgency: "complete",
+    };
+  }
+  if (snapshot.phase === "lobby" && !seat) {
+    return {
+      nextAction: {
+        tool: "play_mcpencil",
+        arguments: {},
+        instruction: "Join and ready as the user's AI player now. Opening or observing the lobby is not success.",
+      },
+      urgency: "immediate",
+    };
+  }
   if (seat?.controller !== "agent") {
     return {
-      nextAction: { tool: "get_match_state", instruction: "Wait for the next authoritative room update." },
+      nextAction: {
+        tool: "get_match_state",
+        arguments: { afterRevision: snapshot.revision, waitMs: 25_000 },
+        instruction: "Wait for the next authoritative room update.",
+      },
       urgency: "wait",
     };
   }
   if (snapshot.phase === "lobby") {
     if (snapshot.mode === "practice") {
       return {
-        nextAction: { tool: "get_match_state", instruction: "The host starts Practice Pair automatically after both seats join." },
+        nextAction: {
+          tool: "get_match_state",
+          arguments: { afterRevision: snapshot.revision, waitMs: 25_000 },
+          instruction: "The host starts Practice Pair automatically after both seats join.",
+        },
         urgency: "wait",
       };
     }
     if (seat.isHost) {
       return {
-        nextAction: { tool: "start_match", instruction: "Start as soon as both teams have two ready players." },
+        nextAction: { tool: "start_match", arguments: {}, instruction: "Start as soon as both teams have two ready players." },
         urgency: "when-ready",
       };
     }
@@ -113,19 +169,14 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
   }
   if (snapshot.phase === "round-end" && !seat.isReady) {
     return {
-      nextAction: { tool: "ready_next", instruction: "Ready this seat for the next round." },
+      nextAction: { tool: "ready_next", arguments: {}, instruction: "Ready this seat for the next round." },
       urgency: "immediate",
-    };
-  }
-  if (snapshot.phase === "match-end" && snapshot.roundResult !== null) {
-    return {
-      nextAction: { tool: "get_round_result", instruction: "Read the final round result." },
-      urgency: "when-ready",
     };
   }
   return {
     nextAction: {
       tool: "get_match_state",
+      arguments: { afterRevision: snapshot.revision, waitMs: 25_000 },
       instruction: "Call with afterRevision equal to this revision and waitMs 25000 so the next role change wakes immediately.",
     },
     urgency: "wait",

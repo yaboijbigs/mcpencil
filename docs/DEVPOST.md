@@ -51,7 +51,7 @@ We do not call an LLM API and do not ship a built-in bot. The intelligence belon
 
 WebMCP is the player-control layer, not a convenience feature.
 
-- `start_practice` and `join_match` let agents become authenticated game participants.
+- `start_practice` and the zero-context `play_mcpencil` room-invite tool let agents become authenticated game participants without an MCPencil-specific skill or prior conversation.
 - Lobby tools let an agent ready its own seat and let only the host start an eligible match.
 - The artist receives `draw_stroke` and `undo_last_stroke`—and loses them immediately when the role rotates. Its private prompt is included only in its role-safe `get_match_state` result.
 - A guesser receives `submit_guesses`, but never the private prompt or artist mutations; up to three ordered candidates become distinct visible room guesses.

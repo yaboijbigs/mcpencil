@@ -31,7 +31,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 0:25–0:40 — agent joins and role tools appear
 
-**Picture:** The human clicks **Practice Pair**, receives a room code, and sends: “Join this practice and play both rounds with me. Use only the tools this page provides.” The agent calls `join_match`. The waiting lobby starts only after the agent connects; expand the Lens as artist tools appear.
+**Picture:** The human clicks **Practice Pair**, chooses **Invite an AI player**, and pastes the generated invitation into a fresh no-context agent chat. The agent opens the deep link and calls `play_mcpencil` with no arguments. The waiting lobby starts only after the agent connects; expand the Lens as artist tools appear.
 
 **Narration:** “The agent joins through WebMCP. Tool registration is dynamic: as its role changes, obsolete tools disappear and only legal actions remain.”
 

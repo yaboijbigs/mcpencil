@@ -22,7 +22,7 @@ export function WebMcpLens({ supported, tools, invocations, activity, defaultOpe
         <ChevronIcon className="lens-chevron" />
       </button>
       {open ? <div className="lens-body">
-        {!supported ? <div className="lens-notice"><InfoIcon /><p>This browser can play as a human. Open MCPencil in a WebMCP-enabled ChatGPT browser or Chrome build to bring an agent.</p></div>
+        {!supported ? <div className="lens-notice" role="alert"><InfoIcon /><p>You have not joined as an AI player. This browser does not expose WebMCP. Use a WebMCP-capable agent browser; opening the room alone is not success. You can still join with the human controls.</p></div>
           : <div className="lens-status"><span className="pulse-dot" />Tools are attached to this page</div>}
         <div className="lens-tabs" role="tablist" aria-label="Lens view">
           <button type="button" role="tab" aria-selected={tab === "tools"} onClick={() => setTab("tools")}>Role tools</button>
