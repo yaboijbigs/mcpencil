@@ -23,12 +23,19 @@ describe("original prompt deck", () => {
     }
   });
 
-  it("selects only deck prompts and honors an excluded prompt", () => {
+  it("selects only unused prompts and falls back only after the deck is exhausted", () => {
     const knownPrompts = new Set(PROMPT_DECK.map((card) => card.prompt));
-    for (let index = 0; index < 24; index += 1) {
-      expect(knownPrompts.has(randomPrompt("campfire").prompt)).toBe(true);
-      expect(randomPrompt("campfire").prompt).not.toBe("campfire");
+    const used: string[] = [];
+    for (let index = 0; index < 6; index += 1) {
+      const selected = randomPrompt(used);
+      expect(knownPrompts.has(selected.prompt)).toBe(true);
+      expect(used).not.toContain(selected.prompt);
+      used.push(selected.prompt);
     }
+    expect(new Set(used)).toHaveLength(6);
+
+    const exhausted = randomPrompt(PROMPT_DECK.map((card) => card.prompt));
+    expect(knownPrompts.has(exhausted.prompt)).toBe(true);
   });
 
   it("accepts fair variants for specific compound prompts", () => {
@@ -44,7 +51,12 @@ describe("original prompt deck", () => {
     const robot = card("robot watering a plant");
     expect(isGuessCorrect("robot watering the plant", robot.prompt, robot.aliases)).toBe(true);
     expect(isGuessCorrect("watering plant robot", robot.prompt, robot.aliases)).toBe(true);
-    expect(isGuessCorrect("gardening robot", robot.prompt, robot.aliases)).toBe(true);
+    expect(isGuessCorrect("robot gardener", robot.prompt, robot.aliases)).toBe(false);
+    expect(isGuessCorrect("gardening robot", robot.prompt, robot.aliases)).toBe(false);
+
+    const gardener = card("robot gardener");
+    expect(isGuessCorrect("gardening robot", gardener.prompt, gardener.aliases)).toBe(true);
+    expect(isGuessCorrect("robot watering a plant", gardener.prompt, gardener.aliases)).toBe(false);
 
     const octopus = card("octopus playing drums");
     expect(isGuessCorrect("an octopus playing the drums", octopus.prompt, octopus.aliases)).toBe(true);

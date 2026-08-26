@@ -5,6 +5,9 @@ import {
   JoinRoomRequestSchema,
   PrimitiveSchema,
   ROUND_DURATION_MS,
+  ROUND_PREP_DURATION_MS,
+  ROUND_RESULT_MAX_MS,
+  ROUND_RESULT_MIN_MS,
   RoomCodeSchema,
   SeatTokenSchema,
   TEAM_ROUND_COUNT,
@@ -141,6 +144,8 @@ interface CommandExecution {
   result: CommandResult;
   alarm: "set" | "delete" | null;
 }
+
+type DeadlineTransition = "prep-started" | "round-ended" | "result-extended" | "round-advanced";
 
 const SCHEMA_VERSION = 1;
 const HUMAN_DRAW_RATE_LIMIT_MS = 40;
@@ -559,7 +564,10 @@ export class GameRoom extends DurableObject<Env> {
     await this.expireAndBroadcast(Date.now());
     const seat = await this.authorizeRequest(request);
     const room = this.requireRoom();
-    if (room.phase !== "drawing" || room.artist_seat_id !== seat.id) {
+    if (
+      (room.phase !== "round-prep" && room.phase !== "drawing")
+      || room.artist_seat_id !== seat.id
+    ) {
       throw new ApiError(403, "NOT_ARTIST", "Only the active artist may see this prompt.");
     }
     const round = this.requireRound(room.round_index);
@@ -773,6 +781,13 @@ export class GameRoom extends DurableObject<Env> {
   ): CommandExecution {
     const room = this.requireRoom();
     this.assertDrawingOrigin(room, seat, command.origin);
+    if (command.origin === "webmcp" && command.primitives.length !== 1) {
+      throw new ApiError(
+        400,
+        "AGENT_STROKE_ONLY",
+        "Agents must send exactly one primitive per draw call so every stroke appears live.",
+      );
+    }
     const payloadJson = JSON.stringify({
       expectedVersion: command.expectedVersion,
       primitives: command.primitives,
@@ -796,11 +811,13 @@ export class GameRoom extends DurableObject<Env> {
 
     const batchId = crypto.randomUUID();
     const finalVersion = room.canvas_version + command.primitives.length;
+    const startsRound = room.phase === "round-prep";
+    const drawingEndsAt = startsRound ? now + ROUND_DURATION_MS : room.ends_at;
     const result: CommandResult = {
       accepted: true,
       revision: room.revision + 1,
       canvasVersion: finalVersion,
-      remainingMs: remainingMs(room, now),
+      remainingMs: drawingEndsAt === null ? null : Math.max(0, drawingEndsAt - now),
       batchId,
       duplicate: false,
     };
@@ -827,10 +844,35 @@ export class GameRoom extends DurableObject<Env> {
           now,
         );
       });
-      this.ctx.storage.sql.exec(
-        "UPDATE room SET revision = revision + 1, canvas_version = ? WHERE id = 1",
-        finalVersion,
-      );
+      if (startsRound) {
+        this.ctx.storage.sql.exec(
+          "UPDATE rounds SET started_at = ?, ends_at = ? WHERE round_index = ?",
+          now,
+          drawingEndsAt,
+          room.round_index,
+        );
+        this.ctx.storage.sql.exec(
+          `UPDATE room SET
+             phase = 'drawing', revision = revision + 1, canvas_version = ?, ends_at = ?
+           WHERE id = 1`,
+          finalVersion,
+          drawingEndsAt,
+        );
+        this.insertActivitySync({
+          roundIndex: room.round_index,
+          kind: "system",
+          label: "round_started",
+          detail: "The drawing clock started with the artist's first stroke.",
+          seatId: seat.id,
+          canvasVersion: finalVersion,
+          now,
+        });
+      } else {
+        this.ctx.storage.sql.exec(
+          "UPDATE room SET revision = revision + 1, canvas_version = ? WHERE id = 1",
+          finalVersion,
+        );
+      }
       this.insertActivitySync({
         roundIndex: room.round_index,
         kind: command.origin === "webmcp" ? "tool-call" : "human-action",
@@ -862,7 +904,7 @@ export class GameRoom extends DurableObject<Env> {
         canvasVersion: finalVersion,
       }),
     );
-    return { result, alarm: null };
+    return { result, alarm: startsRound ? "set" : null };
   }
 
   private undoBatchSync(
@@ -991,7 +1033,7 @@ export class GameRoom extends DurableObject<Env> {
         close,
         pointsAwarded: points,
       },
-      alarm: correct ? "delete" : null,
+      alarm: correct ? "set" : null,
     };
   }
 
@@ -1001,7 +1043,7 @@ export class GameRoom extends DurableObject<Env> {
     if (room.round_index !== expectedRoundIndex) {
       return { result: { ...this.commandResult(), duplicate: true }, alarm: null };
     }
-    if (room.phase === "drawing" || room.phase === "match-end") {
+    if (room.phase === "round-prep" || room.phase === "drawing" || room.phase === "match-end") {
       return { result: { ...this.commandResult(), duplicate: true }, alarm: null };
     }
     this.requirePhase(room, "round-end");
@@ -1023,28 +1065,18 @@ export class GameRoom extends DurableObject<Env> {
     const eligibleSeats = this.seatRows().filter(
       (candidate) => candidate.is_connected === 1 || candidate.id === refreshedSeat.id,
     );
-    const shouldAdvance = refreshedSeat.is_host === 1 || eligibleSeats.every((candidate) => candidate.is_ready === 1);
-    if (!shouldAdvance) return { result: this.commandResult(), alarm: null };
-
-    if (room.round_index + 1 >= room.total_rounds) {
-      this.ctx.storage.transactionSync(() => {
-        this.ctx.storage.sql.exec(
-          "UPDATE room SET phase = 'match-end', revision = revision + 1, ends_at = NULL, artist_seat_id = NULL WHERE id = 1",
-        );
-        this.insertActivitySync({
-          roundIndex: room.round_index,
-          kind: "system",
-          label: "match_complete",
-          detail: "The final page is complete.",
-          canvasVersion: room.canvas_version,
-          now,
-        });
-      });
-      return { result: this.commandResult(), alarm: "delete" };
+    const allReady = eligibleSeats.length > 0
+      && eligibleSeats.every((candidate) => candidate.is_ready === 1);
+    const endedAt = this.requireRound(room.round_index).ended_at;
+    if (!allReady || endedAt === null || now < endedAt + ROUND_RESULT_MIN_MS) {
+      return { result: this.commandResult(), alarm: null };
     }
 
-    this.ctx.storage.transactionSync(() => this.beginRoundSync(room, room.round_index + 1, now));
-    return { result: this.commandResult(), alarm: "set" };
+    this.ctx.storage.transactionSync(() => this.advanceAfterResultSync(room, now));
+    return {
+      result: this.commandResult(),
+      alarm: this.requireRoom().phase === "match-end" ? "delete" : "set",
+    };
   }
 
   private beginRoundSync(previous: RoomRow, roundIndex: number, now: number): void {
@@ -1059,15 +1091,11 @@ export class GameRoom extends DurableObject<Env> {
         ? teamSeats.find((candidate) => candidate.controller === (roundIndex % 2 === 0 ? "agent" : "human"))
         : teamSeats[Math.floor(roundIndex / 2) % teamSeats.length];
     if (artist === undefined) throw new ApiError(409, "NO_ARTIST", "The active team has no artist.");
-    const previousPrompt =
-      roundIndex === 0
-        ? undefined
-        : this.rows<SqlRecord & { prompt: string }>(
-            "SELECT prompt FROM rounds WHERE round_index = ?",
-            roundIndex - 1,
-          )[0]?.prompt;
-    const card = randomPrompt(previousPrompt, previous.mode === "practice");
-    const endsAt = now + ROUND_DURATION_MS;
+    const usedPrompts = this.rows<SqlRecord & { prompt: string }>(
+      "SELECT prompt FROM rounds ORDER BY round_index",
+    ).map((round) => round.prompt);
+    const card = randomPrompt(usedPrompts, previous.mode === "practice");
+    const prepEndsAt = now + ROUND_PREP_DURATION_MS;
 
     this.ctx.storage.sql.exec(
       `INSERT INTO rounds(
@@ -1082,24 +1110,24 @@ export class GameRoom extends DurableObject<Env> {
       artist.id,
       activeTeam,
       now,
-      endsAt,
+      prepEndsAt,
     );
     this.ctx.storage.sql.exec(
       `UPDATE room SET
-        phase = 'drawing', revision = revision + 1, round_index = ?, active_team = ?,
-        artist_seat_id = ?, ends_at = ?, round_result_json = NULL
+        phase = 'round-prep', revision = revision + 1, round_index = ?, active_team = ?,
+        artist_seat_id = ?, ends_at = ?
        WHERE id = 1`,
       roundIndex,
       activeTeam,
       artist.id,
-      endsAt,
+      prepEndsAt,
     );
     this.ctx.storage.sql.exec("UPDATE seats SET is_ready = 0");
     this.insertActivitySync({
       roundIndex,
       kind: "role-change",
-      label: "round_started",
-      detail: "Private prompt delivered to the active artist.",
+      label: "round_prepared",
+      detail: "Private prompt delivered; the round starts with the artist's first stroke.",
       seatId: artist.id,
       origin: artist.controller === "agent" ? "webmcp" : "human-ui",
       canvasVersion: previous.canvas_version,
@@ -1146,11 +1174,13 @@ export class GameRoom extends DurableObject<Env> {
       room.round_index,
     );
     const scoreColumn = round.team === "cobalt" ? "score_cobalt" : "score_coral";
+    const resultDeadline = now + ROUND_RESULT_MIN_MS;
     this.ctx.storage.sql.exec(
       `UPDATE room SET
-        phase = 'round-end', revision = revision + 1, ends_at = NULL,
+        phase = 'round-end', revision = revision + 1, ends_at = ?,
         round_result_json = ?, ${scoreColumn} = ${scoreColumn} + ?
        WHERE id = 1`,
+      resultDeadline,
       JSON.stringify(result),
       points,
     );
@@ -1166,25 +1196,105 @@ export class GameRoom extends DurableObject<Env> {
     });
   }
 
-  private async expireIfNeeded(now: number): Promise<boolean> {
-    const room = this.roomOrNull();
-    if (room === null || room.phase !== "drawing" || room.ends_at === null || room.ends_at > now) {
-      return false;
+  private startDrawingClockSync(room: RoomRow, now: number): void {
+    const drawingEndsAt = now + ROUND_DURATION_MS;
+    this.ctx.storage.sql.exec(
+      "UPDATE rounds SET started_at = ?, ends_at = ? WHERE round_index = ?",
+      now,
+      drawingEndsAt,
+      room.round_index,
+    );
+    this.ctx.storage.sql.exec(
+      "UPDATE room SET phase = 'drawing', revision = revision + 1, ends_at = ? WHERE id = 1",
+      drawingEndsAt,
+    );
+    this.insertActivitySync({
+      roundIndex: room.round_index,
+      kind: "system",
+      label: "round_started",
+      detail: "The drawing clock started.",
+      seatId: room.artist_seat_id ?? undefined,
+      canvasVersion: room.canvas_version,
+      now,
+    });
+  }
+
+  private advanceAfterResultSync(room: RoomRow, now: number): void {
+    if (room.round_index + 1 >= room.total_rounds) {
+      this.ctx.storage.sql.exec(
+        "UPDATE room SET phase = 'match-end', revision = revision + 1, ends_at = NULL, artist_seat_id = NULL WHERE id = 1",
+      );
+      this.insertActivitySync({
+        roundIndex: room.round_index,
+        kind: "system",
+        label: "match_complete",
+        detail: "The final page is complete.",
+        canvasVersion: room.canvas_version,
+        now,
+      });
+      return;
     }
-    this.ctx.storage.transactionSync(() => this.finishRoundSync(room, now, null, 0));
-    await this.ctx.storage.deleteAlarm();
-    console.log(JSON.stringify({ event: "round_expired", roomCode: room.room_code, roundIndex: room.round_index }));
-    return true;
+    this.beginRoundSync(room, room.round_index + 1, now);
+  }
+
+  private expireDeadlineSync(now: number): DeadlineTransition | null {
+    const room = this.roomOrNull();
+    if (room === null || room.ends_at === null || room.ends_at > now) {
+      return null;
+    }
+    if (room.phase === "round-prep") {
+      this.ctx.storage.transactionSync(() => this.startDrawingClockSync(room, now));
+      return "prep-started";
+    }
+    if (room.phase === "drawing") {
+      this.ctx.storage.transactionSync(() => this.finishRoundSync(room, now, null, 0));
+      return "round-ended";
+    }
+    if (room.phase !== "round-end") return null;
+
+    const round = this.requireRound(room.round_index);
+    if (round.ended_at === null) return null;
+    const minDeadline = round.ended_at + ROUND_RESULT_MIN_MS;
+    const hardDeadline = round.ended_at + ROUND_RESULT_MAX_MS;
+    const eligibleSeats = this.seatRows().filter((seat) => seat.is_connected === 1);
+    const allReady = eligibleSeats.length > 0
+      && eligibleSeats.every((seat) => seat.is_ready === 1);
+    if (now >= hardDeadline || (now >= minDeadline && allReady)) {
+      this.ctx.storage.transactionSync(() => this.advanceAfterResultSync(room, now));
+      return "round-advanced";
+    }
+    if (now >= minDeadline) {
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(
+          "UPDATE room SET revision = revision + 1, ends_at = ? WHERE id = 1",
+          hardDeadline,
+        );
+      });
+      return "result-extended";
+    }
+    return null;
   }
 
   private async expireAndBroadcast(now: number): Promise<boolean> {
-    const expired = await this.expireIfNeeded(now);
-    if (expired) await this.broadcastSnapshot();
-    return expired;
+    const transition = this.expireDeadlineSync(now);
+    if (transition === null) return false;
+    const room = this.requireRoom();
+    if (room.ends_at === null) await this.ctx.storage.deleteAlarm();
+    else await this.ctx.storage.setAlarm(room.ends_at);
+    console.log(JSON.stringify({
+      event: "deadline_transition",
+      transition,
+      roomCode: room.room_code,
+      roundIndex: room.round_index,
+    }));
+    await this.broadcastSnapshot();
+    return true;
   }
 
   private assertDrawingOrigin(room: RoomRow, seat: SeatRow, origin: ActionOrigin): void {
-    this.requirePhase(room, "drawing");
+    if (room.phase !== "round-prep" && room.phase !== "drawing") {
+      throw new ApiError(409, "WRONG_PHASE", "Drawing is only available during round preparation or drawing.");
+    }
     if (room.artist_seat_id !== seat.id) {
       throw new ApiError(403, "NOT_ARTIST", "Only the active artist can change the canvas.");
     }

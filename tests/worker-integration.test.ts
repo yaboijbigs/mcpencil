@@ -12,6 +12,7 @@ import type {
   SeatCredentials,
   VectorPrimitive,
 } from "../src/shared/game";
+import { ROUND_RESULT_MAX_MS, ROUND_RESULT_MIN_MS } from "../src/shared/game";
 
 const BASE_URL = "https://mcpencil.com";
 
@@ -96,6 +97,23 @@ async function prompt(credentials: SeatCredentials): Promise<Response> {
   });
 }
 
+async function fireReadyResultDeadline(credentials: SeatCredentials, roundIndex: number): Promise<void> {
+  const stub = env.ROOMS.getByName(credentials.roomCode);
+  await runInDurableObject(stub, async (_instance, durableState) => {
+    const now = Date.now();
+    const endedAt = now - ROUND_RESULT_MIN_MS - 1;
+    durableState.storage.sql.exec(
+      "UPDATE rounds SET started_at = ?, ended_at = ? WHERE round_index = ?",
+      endedAt - 1_000,
+      endedAt,
+      roundIndex,
+    );
+    durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+    await durableState.storage.setAlarm(now + 60_000);
+  });
+  expect(await runDurableObjectAlarm(stub)).toBe(true);
+}
+
 const oneLine: VectorPrimitive = {
   type: "line",
   x1: 100,
@@ -140,7 +158,7 @@ describe("Practice Pair HTTP journey", () => {
     const firstState = await state(human);
     expect(firstState).toMatchObject({
       mode: "practice",
-      phase: "drawing",
+      phase: "round-prep",
       roundIndex: 0,
       totalRounds: 2,
       artistSeatId: agent.seatId,
@@ -172,6 +190,17 @@ describe("Practice Pair HTTP journey", () => {
     expect(wrongOrigin.status).toBe(403);
     expect(await body<ApiFailure>(wrongOrigin)).toMatchObject({ code: "ORIGIN_MISMATCH" });
 
+    const rejectedMultiStroke = await command(agent, {
+      type: "draw_batch",
+      expectedVersion: 0,
+      idempotencyKey: "agent-multi-stroke",
+      primitives: [oneLine, { ...oneLine, y1: 200, y2: 350 }],
+      origin: "webmcp",
+    });
+    expect(rejectedMultiStroke.status).toBe(400);
+    expect(await body<ApiFailure>(rejectedMultiStroke)).toMatchObject({ code: "AGENT_STROKE_ONLY" });
+    expect(await state(human)).toMatchObject({ phase: "round-prep", canvasVersion: 0 });
+
     const firstDrawCommand: RoomCommand = {
       type: "draw_batch",
       expectedVersion: 0,
@@ -183,6 +212,8 @@ describe("Practice Pair HTTP journey", () => {
     expect(firstDraw.status).toBe(200);
     const firstDrawResult = await body<CommandResult>(firstDraw);
     expect(firstDrawResult).toMatchObject({ accepted: true, canvasVersion: 1, duplicate: false });
+    expect(firstDrawResult.remainingMs).toBeGreaterThan(89_000);
+    expect(await state(human)).toMatchObject({ phase: "drawing", canvasVersion: 1 });
 
     const duplicate = await command(agent, firstDrawCommand);
     expect(duplicate.status).toBe(200);
@@ -234,12 +265,17 @@ describe("Practice Pair HTTP journey", () => {
 
     const next = await command(human, { type: "ready_next", expectedRoundIndex: 0, origin: "human-ui" });
     expect(next.status).toBe(200);
+    const agentReady = await command(agent, { type: "ready_next", expectedRoundIndex: 0, origin: "webmcp" });
+    expect(agentReady.status).toBe(200);
+    expect(await state(human)).toMatchObject({ phase: "round-end", roundIndex: 0 });
+    await fireReadyResultDeadline(human, 0);
     const secondState = await state(agent);
     expect(secondState).toMatchObject({
-      phase: "drawing",
+      phase: "round-prep",
       roundIndex: 1,
       artistSeatId: human.seatId,
     });
+    expect(secondState.roundResult).toMatchObject({ prompt: firstPrompt.prompt, roundIndex: 0 });
 
     const lateReady = await command(agent, { type: "ready_next", expectedRoundIndex: 0, origin: "webmcp" });
     expect(lateReady.status).toBe(200);
@@ -251,7 +287,8 @@ describe("Practice Pair HTTP journey", () => {
     expect(humanPromptResponse.status).toBe(200);
     const secondPrompt = await body<PrivatePrompt>(humanPromptResponse);
     expect(secondPrompt.prompt).not.toBe(firstPrompt.prompt);
-    assertPromptAbsent(await state(agent), secondPrompt.prompt);
+    expect(JSON.stringify(await state(agent)).toLocaleLowerCase("en-US"))
+      .not.toContain(secondPrompt.prompt.toLocaleLowerCase("en-US"));
 
     const humanDraw = await command(human, {
       type: "draw_batch",
@@ -281,6 +318,10 @@ describe("Practice Pair HTTP journey", () => {
 
     const finish = await command(human, { type: "ready_next", expectedRoundIndex: 1, origin: "human-ui" });
     expect(finish.status).toBe(200);
+    const agentFinish = await command(agent, { type: "ready_next", expectedRoundIndex: 1, origin: "webmcp" });
+    expect(agentFinish.status).toBe(200);
+    expect(await state(human)).toMatchObject({ phase: "round-end", roundIndex: 1 });
+    await fireReadyResultDeadline(human, 1);
     const finalState = await state(human);
     expect(finalState.phase).toBe("match-end");
     expect(finalState.artistSeatId).toBeNull();
@@ -337,11 +378,19 @@ describe("Durable room authority", () => {
     });
   });
 
-  it("finalizes an expired round through the Durable Object alarm", async () => {
+  it("starts a blank prepared round, then finalizes drawing through Durable Object alarms", async () => {
     const human = await createRoom("practice", "Alarm Test");
     const agent = await joinRoom(human.roomCode, "Alarm Agent", "cobalt", "agent");
     await connectPractice(human, agent);
     const stub = env.ROOMS.getByName(human.roomCode);
+    await runInDurableObject(stub, async (_instance, durableState) => {
+      const expiredAt = Date.now() - 1;
+      durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", expiredAt);
+      await durableState.storage.setAlarm(Date.now() + 60_000);
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    expect(await state(human)).toMatchObject({ phase: "drawing", canvasVersion: 0 });
+
     await runInDurableObject(stub, async (_instance, durableState) => {
       const expiredAt = Date.now() - 1;
       durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", expiredAt);
@@ -358,10 +407,76 @@ describe("Durable room authority", () => {
     });
   });
 
+  it("keeps results stable through the minimum and advances at the hard deadline", async () => {
+    const human = await createRoom("practice", "Results Host");
+    const agent = await joinRoom(human.roomCode, "Results Agent", "cobalt", "agent");
+    await connectPractice(human, agent);
+    const secret = await body<PrivatePrompt>(await prompt(agent));
+    expect((await command(agent, {
+      type: "draw_batch",
+      expectedVersion: 0,
+      idempotencyKey: "results-opening-stroke",
+      primitives: [oneLine],
+      origin: "webmcp",
+    })).status).toBe(200);
+    expect((await command(human, {
+      type: "submit_guess",
+      guess: secret.prompt,
+      origin: "human-ui",
+    })).status).toBe(200);
+
+    expect((await command(human, {
+      type: "ready_next",
+      expectedRoundIndex: 0,
+      origin: "human-ui",
+    })).status).toBe(200);
+    const stub = env.ROOMS.getByName(human.roomCode);
+    await runInDurableObject(stub, async (_instance, durableState) => {
+      const now = Date.now();
+      const endedAt = now - ROUND_RESULT_MIN_MS - 1;
+      durableState.storage.sql.exec(
+        "UPDATE rounds SET started_at = ?, ended_at = ? WHERE round_index = 0",
+        endedAt - 1_000,
+        endedAt,
+      );
+      durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+      await durableState.storage.setAlarm(now + 60_000);
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const held = await state(human);
+    expect(held).toMatchObject({ phase: "round-end", roundIndex: 0 });
+    expect(held.roundResult).toMatchObject({ prompt: secret.prompt });
+
+    await runInDurableObject(stub, async (_instance, durableState) => {
+      const now = Date.now();
+      const endedAt = now - ROUND_RESULT_MAX_MS - 1;
+      durableState.storage.sql.exec(
+        "UPDATE rounds SET started_at = ?, ended_at = ? WHERE round_index = 0",
+        endedAt - 1_000,
+        endedAt,
+      );
+      durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+      await durableState.storage.setAlarm(now + 60_000);
+    });
+    expect(await runDurableObjectAlarm(stub)).toBe(true);
+    const advanced = await state(human);
+    expect(advanced).toMatchObject({ phase: "round-prep", roundIndex: 1 });
+    expect(advanced.roundResult).toMatchObject({ prompt: secret.prompt, roundIndex: 0 });
+  });
+
   it("expires immediately before command execution and rejects a late mutation", async () => {
     const human = await createRoom("practice", "Deadline Test");
     const agent = await joinRoom(human.roomCode, "Deadline Agent", "cobalt", "agent");
     await connectPractice(human, agent);
+
+    const firstStroke = await command(agent, {
+      type: "draw_batch",
+      expectedVersion: 0,
+      idempotencyKey: "on-time-agent-stroke",
+      primitives: [oneLine],
+      origin: "webmcp",
+    });
+    expect(firstStroke.status).toBe(200);
 
     const stub = env.ROOMS.getByName(human.roomCode);
     await runInDurableObject(stub, async (_instance, durableState) => {
@@ -372,7 +487,7 @@ describe("Durable room authority", () => {
 
     const lateDraw = await command(agent, {
       type: "draw_batch",
-      expectedVersion: 0,
+      expectedVersion: 1,
       idempotencyKey: "late-agent-batch",
       primitives: [oneLine],
       origin: "webmcp",
@@ -381,8 +496,8 @@ describe("Durable room authority", () => {
     expect(await body<ApiFailure>(lateDraw)).toMatchObject({ code: "WRONG_PHASE" });
 
     const expired = await state(human);
-    expect(expired).toMatchObject({ phase: "round-end", canvasVersion: 0 });
-    expect(expired.roundResult).toMatchObject({ pointsAwarded: 0, strokeCount: 0 });
+    expect(expired).toMatchObject({ phase: "round-end", canvasVersion: 1 });
+    expect(expired.roundResult).toMatchObject({ pointsAwarded: 0, strokeCount: 1 });
   });
 
   it("enforces arena team, host, artist, and guesser permissions", async () => {
@@ -413,12 +528,30 @@ describe("Durable room authority", () => {
     const hostStart = await command(host, { type: "start_match", origin: "human-ui" });
     expect(hostStart.status).toBe(200);
     const started = await state(host);
-    expect(started).toMatchObject({ phase: "drawing", activeTeam: "cobalt" });
+    expect(started).toMatchObject({ phase: "round-prep", activeTeam: "cobalt" });
     expect(started.artistSeatId).toBe(host.seatId);
 
     const artistPromptResponse = await prompt(host);
     expect(artistPromptResponse.status).toBe(200);
     const artistPrompt = await body<PrivatePrompt>(artistPromptResponse);
+
+    const prepGuess = await command(cobaltMate, {
+      type: "submit_guess",
+      guess: artistPrompt.prompt,
+      origin: "human-ui",
+    });
+    expect(prepGuess.status).toBe(409);
+    expect(await body<ApiFailure>(prepGuess)).toMatchObject({ code: "WRONG_PHASE" });
+
+    const openingStroke = await command(host, {
+      type: "draw_batch",
+      expectedVersion: started.canvasVersion,
+      idempotencyKey: "arena-opening-stroke",
+      primitives: [oneLine],
+      origin: "human-ui",
+    });
+    expect(openingStroke.status).toBe(200);
+    expect(await state(host)).toMatchObject({ phase: "drawing", canvasVersion: 1 });
 
     const opponentGuess = await command(coralOne, {
       type: "submit_guess",
@@ -450,6 +583,73 @@ describe("Durable room authority", () => {
     expect(ended.scores.coral).toBe(0);
   });
 
+  it("uses six different prompts across a complete arena match", async () => {
+    const host = await createRoom("arena", "Deck Host");
+    const coralOne = await joinRoom(host.roomCode, "Deck Coral One");
+    const cobaltMate = await joinRoom(host.roomCode, "Deck Cobalt Mate");
+    const coralTwo = await joinRoom(host.roomCode, "Deck Coral Two");
+    const players = [host, coralOne, cobaltMate, coralTwo];
+    await Promise.all(players.map(connectSeat));
+    for (const player of players) {
+      expect((await command(player, {
+        type: "ready_up",
+        ready: true,
+        origin: "human-ui",
+      })).status).toBe(200);
+    }
+    expect((await command(host, { type: "start_match", origin: "human-ui" })).status).toBe(200);
+
+    const credentialsBySeat = new Map(players.map((player) => [player.seatId, player]));
+    const seen = new Set<string>();
+    const stub = env.ROOMS.getByName(host.roomCode);
+    for (let roundIndex = 0; roundIndex < 6; roundIndex += 1) {
+      const prepared = await state(host);
+      expect(prepared).toMatchObject({ phase: "round-prep", roundIndex });
+      const artist = credentialsBySeat.get(prepared.artistSeatId!);
+      expect(artist).toBeDefined();
+      const card = await body<PrivatePrompt>(await prompt(artist!));
+      expect(seen.has(card.prompt)).toBe(false);
+      seen.add(card.prompt);
+
+      await runInDurableObject(stub, async (_instance, durableState) => {
+        const now = Date.now();
+        durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+        await durableState.storage.setAlarm(now + 60_000);
+      });
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+      expect(await state(host)).toMatchObject({ phase: "drawing", roundIndex });
+
+      await runInDurableObject(stub, async (_instance, durableState) => {
+        const now = Date.now();
+        durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+        durableState.storage.sql.exec(
+          "UPDATE rounds SET ends_at = ? WHERE round_index = ?",
+          now - 1,
+          roundIndex,
+        );
+        await durableState.storage.setAlarm(now + 60_000);
+      });
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+      expect(await state(host)).toMatchObject({ phase: "round-end", roundIndex });
+
+      await runInDurableObject(stub, async (_instance, durableState) => {
+        const now = Date.now();
+        const endedAt = now - ROUND_RESULT_MAX_MS - 1;
+        durableState.storage.sql.exec(
+          "UPDATE rounds SET started_at = ?, ended_at = ? WHERE round_index = ?",
+          endedAt - 1_000,
+          endedAt,
+          roundIndex,
+        );
+        durableState.storage.sql.exec("UPDATE room SET ends_at = ? WHERE id = 1", now - 1);
+        await durableState.storage.setAlarm(now + 60_000);
+      });
+      expect(await runDurableObjectAlarm(stub)).toBe(true);
+    }
+    expect(seen).toHaveLength(6);
+    expect(await state(host)).toMatchObject({ phase: "match-end", roundIndex: 5 });
+  });
+
   it("auto-readies agent joins and ignores disconnected unready lobby ghosts", async () => {
     const host = await createRoom("arena", "Fast Host");
     const coralAgent = await joinRoom(host.roomCode, "Coral Agent", "coral", "agent");
@@ -470,7 +670,7 @@ describe("Durable room authority", () => {
 
     const start = await command(host, { type: "start_match", origin: "human-ui" });
     expect(start.status).toBe(200);
-    expect(await state(host)).toMatchObject({ phase: "drawing", artistSeatId: host.seatId });
+    expect(await state(host)).toMatchObject({ phase: "round-prep", artistSeatId: host.seatId });
   });
 
   it("removes lobby seats on explicit leave and transfers hosting", async () => {

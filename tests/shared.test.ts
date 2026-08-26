@@ -222,6 +222,7 @@ describe("vector command contract", () => {
 describe("role-safe shared helpers", () => {
   it("recognizes only the current artist during drawing", () => {
     expect(isArtist(snapshot(), "artist")).toBe(true);
+    expect(isArtist(snapshot({ phase: "round-prep" }), "artist")).toBe(true);
     expect(isArtist(snapshot(), "guesser")).toBe(false);
     expect(isArtist(snapshot({ phase: "round-end" }), "artist")).toBe(false);
   });
@@ -250,9 +251,8 @@ describe("dynamic WebMCP availability", () => {
     ]);
     expect(webMcpToolNames(snapshot(), "artist")).toEqual([
       "get_match_state",
-      "get_draw_prompt",
-      "draw_batch",
-      "undo_draw_batch",
+      "draw_stroke",
+      "undo_last_stroke",
     ]);
     expect(webMcpToolNames(snapshot(), "guesser")).toEqual(["get_match_state"]);
   });
@@ -276,7 +276,7 @@ describe("dynamic WebMCP availability", () => {
     expect(webMcpToolNames(practiceLobby, null)).toEqual(["get_match_state", "join_match"]);
   });
 
-  it("withholds submit_guess until the human prompt is hidden", () => {
+  it("withholds submit_guesses until the human prompt is hidden", () => {
     const agentGuesser = snapshot({
       seats: snapshot().seats.map((seat) =>
         seat.id === "guesser" ? { ...seat, controller: "agent" as const, isReady: false } : seat,
@@ -285,9 +285,19 @@ describe("dynamic WebMCP availability", () => {
     expect(webMcpToolNames(agentGuesser, "guesser", false)).toEqual(["get_match_state"]);
     expect(webMcpToolNames(agentGuesser, "guesser", true)).toEqual([
       "get_match_state",
-      "submit_guess",
+      "submit_guesses",
     ]);
-    expect(webMcpToolNames({ ...agentGuesser, phase: "round-end" }, "guesser")).toEqual([
+    const roundResult = {
+      roundIndex: 0,
+      prompt: "sleepy volcano",
+      artistSeatId: "artist",
+      team: "cobalt" as const,
+      pointsAwarded: 0,
+      elapsedMs: 90_000,
+      strokeCount: 4,
+      toolCallCount: 4,
+    };
+    expect(webMcpToolNames({ ...agentGuesser, phase: "round-end", roundResult }, "guesser")).toEqual([
       "get_match_state",
       "get_round_result",
       "ready_next",
@@ -295,8 +305,120 @@ describe("dynamic WebMCP availability", () => {
     expect(webMcpToolNames({
       ...agentGuesser,
       phase: "round-end",
+      roundResult,
       seats: agentGuesser.seats.map((seat) => seat.id === "guesser" ? { ...seat, isReady: true } : seat),
     }, "guesser")).toEqual(["get_match_state", "get_round_result"]);
+  });
+
+  it("supports the hosted Practice Pair WebMCP lifecycle end to end", () => {
+    const humanHost = {
+      id: "human-host",
+      name: "Human Host",
+      team: "cobalt" as const,
+      controller: "human" as const,
+      isHost: true,
+      isReady: true,
+      isConnected: true,
+    };
+    const agent = {
+      id: "practice-agent",
+      name: "Ink",
+      team: "cobalt" as const,
+      controller: "agent" as const,
+      isHost: false,
+      isReady: true,
+      isConnected: true,
+    };
+    const waiting = snapshot({
+      mode: "practice",
+      phase: "lobby",
+      totalRounds: 2,
+      artistSeatId: null,
+      seats: [humanHost],
+    });
+    expect(webMcpToolNames(waiting, null)).toEqual(["get_match_state", "join_match"]);
+
+    const agentPrep = snapshot({
+      mode: "practice",
+      phase: "round-prep",
+      totalRounds: 2,
+      artistSeatId: agent.id,
+      seats: [humanHost, agent],
+    });
+    expect(webMcpToolNames(agentPrep, agent.id)).toEqual([
+      "get_match_state",
+      "draw_stroke",
+      "undo_last_stroke",
+    ]);
+    expect(compactWebMcpState(agentPrep, agent.id)).toMatchObject({
+      yourRole: "artist",
+      nextAction: { tool: "draw_stroke" },
+      urgency: "immediate",
+      deadline: agentPrep.endsAt,
+    });
+
+    const firstResult = {
+      roundIndex: 0,
+      prompt: "tiny dragon",
+      artistSeatId: agent.id,
+      team: "cobalt" as const,
+      guessedBySeatId: humanHost.id,
+      pointsAwarded: 142,
+      elapsedMs: 48_000,
+      strokeCount: 6,
+      toolCallCount: 6,
+    };
+    const humanPrep = snapshot({
+      mode: "practice",
+      phase: "round-prep",
+      roundIndex: 1,
+      totalRounds: 2,
+      artistSeatId: humanHost.id,
+      seats: [humanHost, agent],
+      roundResult: firstResult,
+    });
+    expect(webMcpToolNames(humanPrep, agent.id, true)).toEqual([
+      "get_match_state",
+      "get_round_result",
+    ]);
+
+    const humanDrawing = { ...humanPrep, phase: "drawing" as const };
+    expect(webMcpToolNames(humanDrawing, agent.id, false)).toEqual([
+      "get_match_state",
+      "get_round_result",
+    ]);
+    expect(webMcpToolNames(humanDrawing, agent.id, true)).toEqual([
+      "get_match_state",
+      "submit_guesses",
+      "get_round_result",
+    ]);
+    expect(webMcpToolNames({ ...humanDrawing, phase: "match-end" }, agent.id, true)).toEqual([
+      "get_match_state",
+      "get_round_result",
+    ]);
+  });
+
+  it("keeps the previous round result readable while the next artist draws", () => {
+    const previousResult = {
+      roundIndex: 0,
+      prompt: "flying library",
+      artistSeatId: "opponent",
+      team: "coral" as const,
+      pointsAwarded: 120,
+      elapsedMs: 70_000,
+      strokeCount: 9,
+      toolCallCount: 9,
+    };
+    expect(webMcpToolNames(snapshot({
+      phase: "round-prep",
+      roundIndex: 1,
+      roundResult: previousResult,
+    }), "artist")).toEqual([
+      "get_match_state",
+      "draw_stroke",
+      "undo_last_stroke",
+      "get_round_result",
+    ]);
   });
 
   it("gives only active agent guessers bounded current-round geometry and recent guesses", () => {
@@ -337,6 +459,8 @@ describe("dynamic WebMCP availability", () => {
       canvasGeometry: VectorPrimitive[];
       recentGuesses: Array<{ text: string; correct: boolean }>;
       guidance: string;
+      nextAction: { tool: string; instruction: string };
+      urgency: string;
     };
     expect(state.canvasGeometry).toHaveLength(60);
     expect(state.canvasGeometry[0]).toMatchObject({ type: "line", x1: 0 });
@@ -345,6 +469,9 @@ describe("dynamic WebMCP availability", () => {
     expect((state.canvasGeometry.at(-1) as Extract<VectorPrimitive, { type: "polyline" }>).points).toHaveLength(10);
     expect(state.recentGuesses.map(({ text }) => text)).toEqual(Array.from({ length: 8 }, (_, index) => `answer ${index + 2}`));
     expect(state.guidance).toContain("immediately");
+    expect(state.nextAction.tool).toBe("submit_guesses");
+    expect(state.nextAction.instruction).toContain("Visually inspect");
+    expect(state.urgency).toBe("immediate");
     expect(compactWebMcpState(agentSnapshot, "artist")).not.toHaveProperty("canvasGeometry");
   });
 });

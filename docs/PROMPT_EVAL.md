@@ -63,7 +63,7 @@ Run two blinded passes against all 12 cards.
 2. Give the agent only the private prompt and normal artist tools.
 3. Do not coach drawing strategy after the round starts.
 4. Recruit at least three human guessers across the set; no guesser sees this document.
-5. Record correct/incorrect, time-to-correct, number of drawing batches, primitives, tool errors, and whether a human needed a curated alias.
+5. Record correct/incorrect, time-to-correct, visible strokes, tool calls, tool errors, and whether a human needed a curated alias.
 
 Release target: **at least 8/12 cards guessed correctly** and **zero tool-contract failures**.
 

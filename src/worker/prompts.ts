@@ -10,7 +10,7 @@ export const PROMPT_DECK: readonly PromptCard[] = [
   {
     prompt: "robot gardener",
     category: "characters",
-    aliases: ["gardening robot", "robot gardening", "robot watering a plant", "robot watering the plant"],
+    aliases: ["gardening robot", "robot gardening"],
   },
   { prompt: "hot air balloon", category: "travel", aliases: ["air balloon", "balloon"] },
   { prompt: "sleepy volcano", category: "nature", aliases: ["sleeping volcano"] },
@@ -55,9 +55,6 @@ export const PROMPT_DECK: readonly PromptCard[] = [
       "a robot watering a plant",
       "a robot watering the plant",
       "watering plant robot",
-      "robot gardener",
-      "gardening robot",
-      "robot gardening",
       "robot with watering can",
     ],
   },
@@ -109,10 +106,15 @@ const PRACTICE_PROMPT_NAMES = new Set([
 ]);
 const PRACTICE_PROMPTS = PROMPT_DECK.filter((card) => PRACTICE_PROMPT_NAMES.has(card.prompt));
 
-export function randomPrompt(exclude?: string, practice = false): PromptCard {
+export function randomPrompt(
+  usedPrompts: Iterable<string> | string = [],
+  practice = false,
+): PromptCard {
   const deck = practice ? PRACTICE_PROMPTS : PROMPT_DECK;
+  const used = new Set(typeof usedPrompts === "string" ? [usedPrompts] : usedPrompts);
+  const available = deck.filter((card) => !used.has(card.prompt));
+  const candidates = available.length > 0 ? available : deck;
   const random = crypto.getRandomValues(new Uint32Array(1))[0] ?? 0;
-  let index = random % deck.length;
-  if (deck[index]?.prompt === exclude) index = (index + 1) % deck.length;
-  return deck[index] ?? deck[0] ?? PROMPT_DECK[0]!;
+  const index = random % candidates.length;
+  return candidates[index] ?? deck[0] ?? PROMPT_DECK[0]!;
 }

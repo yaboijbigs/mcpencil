@@ -64,11 +64,11 @@ export interface RoomSession {
   join(
     roomCode: string,
     input: { name: string; team?: TeamId; controller: ControllerType },
-  ): Promise<void>;
+  ): Promise<JoinRoomResponse>;
   joinAgent(
     roomCode: string,
     input: { name: string; team?: TeamId; controller: ControllerType },
-  ): Promise<void>;
+  ): Promise<JoinRoomResponse>;
   command(command: RoomCommand, signal?: AbortSignal): ReturnType<typeof sendRoomCommand>;
   agentCommand(command: RoomCommand, signal?: AbortSignal): ReturnType<typeof sendRoomCommand>;
   privatePrompt(signal?: AbortSignal): Promise<PrivatePrompt>;
@@ -88,8 +88,12 @@ export function useRoomSession(): RoomSession {
   const [loading, setLoading] = useState(Boolean(credentials));
   const [connected, setConnected] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const snapshotRef = useRef(snapshot);
+  snapshotRef.current = snapshot;
   const credentialsRef = useRef(credentials);
   credentialsRef.current = credentials;
+  const companionRef = useRef(companion);
+  companionRef.current = companion;
   const canvasVersionRef = useRef(0);
   const versionRoomRef = useRef<string | null>(null);
   if (snapshot?.roomCode !== versionRoomRef.current) {
@@ -106,6 +110,8 @@ export function useRoomSession(): RoomSession {
       token: response.token,
     };
     saveCredentials({ primary: next });
+    credentialsRef.current = next;
+    companionRef.current = null;
     setCredentials(next);
     setCompanion(null);
     setSnapshot(response.snapshot);
@@ -132,7 +138,9 @@ export function useRoomSession(): RoomSession {
     async (roomCode, input) => {
       setLoading(true);
       try {
-        adopt(await joinRoom(roomCode.trim().toUpperCase(), input));
+        const response = await joinRoom(roomCode.trim().toUpperCase(), input);
+        adopt(response);
+        return response;
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not join that room.");
         throw reason;
@@ -158,9 +166,11 @@ export function useRoomSession(): RoomSession {
           token: response.token,
         };
         saveCredentials({ primary, companion: nextCompanion });
+        companionRef.current = nextCompanion;
         setCompanion(nextCompanion);
         setSnapshot(response.snapshot);
         setError(null);
+        return response;
       } catch (reason) {
         setError(reason instanceof Error ? reason.message : "Could not join the agent to practice.");
         throw reason;
@@ -198,9 +208,6 @@ export function useRoomSession(): RoomSession {
         const outgoing = withLatestCanvasVersion(roomCommand, canvasVersionRef.current);
         const result = await sendRoomCommand(current.roomCode, current.token, outgoing, signal);
         canvasVersionRef.current = Math.max(canvasVersionRef.current, result.canvasVersion);
-        // The authoritative WebSocket snapshot follows the acknowledgement. Do not make
-        // agents wait on a redundant state round-trip before their tool call can return.
-        void refresh().catch(() => undefined);
         return result;
       } catch (reason) {
         if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -209,7 +216,7 @@ export function useRoomSession(): RoomSession {
         throw reason;
       }
     },
-    [refresh],
+    [],
   );
 
   const privatePrompt = useCallback(async (signal?: AbortSignal) => {
@@ -219,13 +226,12 @@ export function useRoomSession(): RoomSession {
   }, []);
 
   const agentCommand = useCallback(async (roomCommand: RoomCommand, signal?: AbortSignal) => {
-    const current = companion ?? credentialsRef.current;
+    const current = companionRef.current ?? credentialsRef.current;
     if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
     try {
       const outgoing = withLatestCanvasVersion(roomCommand, canvasVersionRef.current);
       const result = await sendRoomCommand(current.roomCode, current.token, outgoing, signal);
       canvasVersionRef.current = Math.max(canvasVersionRef.current, result.canvasVersion);
-      void refresh().catch(() => undefined);
       return result;
     } catch (reason) {
       if (!(reason instanceof DOMException && reason.name === "AbortError")) {
@@ -233,13 +239,13 @@ export function useRoomSession(): RoomSession {
       }
       throw reason;
     }
-  }, [companion, refresh]);
+  }, []);
 
   const agentPrivatePrompt = useCallback(async (signal?: AbortSignal) => {
-    const current = companion ?? credentialsRef.current;
+    const current = companionRef.current ?? credentialsRef.current;
     if (!current) throw new ApiError("Join a room first.", "not_joined", 401);
     return getPrivatePrompt(current.roomCode, current.token, signal);
-  }, [companion]);
+  }, []);
 
   const replay = useCallback(async (signal?: AbortSignal) => {
     const current = credentialsRef.current;
@@ -304,6 +310,10 @@ export function useRoomSession(): RoomSession {
 
   useEffect(() => {
     if (!credentials) {
+      setLoading(false);
+      return;
+    }
+    if (snapshotRef.current?.roomCode === credentials.roomCode) {
       setLoading(false);
       return;
     }

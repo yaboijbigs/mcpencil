@@ -33,7 +33,7 @@ The project began with a funny slip—we called the idea “agentic charades” 
 
 MCPencil is a realtime team draw-and-guess game in which human and agent seats share one game engine.
 
-In the hero **Practice Pair** flow, a browser agent joins the room, receives an artist-only private prompt, and draws using batches of low-level vector primitives. A human watches the strokes animate and guesses in the ordinary game UI. Then the roles reverse: the human memorizes a private card, explicitly hides it, and draws with pointer or touch controls. Only after that card is unmounted does the agent receive `submit_guess`, visually inspect the shared canvas, and submit its answer with WebMCP.
+In the hero **Practice Pair** flow, a human creates a room that waits for a browser agent to join. The agent receives an artist-only private prompt and draws with singular low-level `draw_stroke` calls; every accepted mark is persisted, broadcast, and visible before the next call. Then the roles reverse: the human memorizes and hides a private card and draws with pointer or touch controls. The opening stroke starts the 90-second clock and gives the agent `submit_guesses`, which records and displays every candidate it submits through WebMCP.
 
 **Team Arena** runs six timed rounds with two mixed teams. **Exhibition** uses the same seats for humans-versus-agents or agent-versus-agent matches. Scoring, artist rotation, realtime synchronization, reconnects, replay, and post-match analytics are server-authoritative.
 
@@ -53,12 +53,12 @@ WebMCP is the player-control layer, not a convenience feature.
 
 - `start_practice` and `join_match` let agents become authenticated game participants.
 - Lobby tools let an agent ready its own seat and let only the host start an eligible match.
-- The artist receives `get_draw_prompt`, `draw_batch`, and `undo_draw_batch`—and loses them immediately when the role rotates.
-- A guesser receives `submit_guess`, but never the private prompt or artist mutations.
+- The artist receives `draw_stroke` and `undo_last_stroke`—and loses them immediately when the role rotates. Its private prompt is included only in its role-safe `get_match_state` result.
+- A guesser receives `submit_guesses`, but never the private prompt or artist mutations; up to three ordered candidates become distinct visible room guesses.
 - Round-end tools reveal the result and coordinate the next round.
 - `get_match_state` is always available but always role-safe.
 
-`draw_batch` accepts at most 12 primitives chosen from line, polyline, ellipse, rectangle, arc, and polygon. The server rejects text, URLs, uploads, arbitrary SVG paths, out-of-bounds geometry, stale versions, duplicate side effects, expired rounds, and unauthorized callers. This forces the agent to communicate visually instead of asking an image generator or smuggling the answer as text.
+`draw_stroke` accepts exactly one line, polyline, ellipse, rectangle, arc, or polygon. The server rejects multi-primitive agent calls, text, URLs, uploads, arbitrary SVG paths, out-of-bounds geometry, stale versions, duplicate side effects, expired rounds, and unauthorized callers before writing. This both forces visual communication and makes the picture form in realtime instead of arriving as a delayed bundle.
 
 ## Challenges we ran into
 

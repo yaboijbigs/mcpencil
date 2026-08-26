@@ -44,7 +44,7 @@ Controls:
 - the private prompt path verifies the token hash, active seat, artist role, phase, and round;
 - raw prompts are never included in activity/Lens entries or application logs;
 - generic error codes do not interpolate answers;
-- Practice round two withholds `submit_guess` until the human explicitly hides the private card and its answer is unmounted from the document;
+- Practice round two withholds `submit_guesses` until the human hides the private card, its answer is unmounted, and the opening stroke begins the timed drawing phase;
 - tests recursively scan every pre-reveal shared payload for the answer and known aliases.
 
 ### Seat impersonation or token theft
@@ -82,7 +82,7 @@ Threats include scripts in SVG, external URLs, huge path strings, extreme coordi
 Controls:
 
 - strict discriminated Zod schemas accept only six primitive types and reject unknown keys;
-- coordinates, dimensions, widths, colors, point counts, primitives per batch, and request sizes are bounded;
+- coordinates, dimensions, widths, colors, point counts, and request sizes are bounded, and WebMCP-origin drawing mutations must contain exactly one primitive;
 - no arbitrary path/markup/text/URL/image field exists;
 - renderers create known React SVG elements from numeric data;
 - the room revalidates the canvas height constraint and payload budget;
@@ -94,7 +94,7 @@ Threats include duplicated agent calls, replayed requests, stale clients overwri
 
 Controls:
 
-- `draw_batch` requires a bounded caller-generated idempotency key with per-round uniqueness;
+- each `draw_stroke` call receives a bounded generated idempotency key with per-round uniqueness;
 - the room returns the previous compact acknowledgement for a duplicate key;
 - mutations require the expected canvas version;
 - the Durable Object serializes room commands;
@@ -121,7 +121,7 @@ Threats include a global coordinator bottleneck, oversized rooms, connection flo
 Controls:
 
 - one deterministically named Durable Object owns each room;
-- room seats, message sizes, batches, points, guesses, and action frequency are capped;
+- room seats, message sizes, vector operations, points, guesses, and action frequency are capped;
 - WebSocket messages use a small fixed protocol and invalid frames close cleanly;
 - completed room retention and replay size are bounded;
 - static assets are served at the edge;

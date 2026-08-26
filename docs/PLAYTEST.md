@@ -18,7 +18,7 @@ The gate must cover:
 - room isolation and token authorization;
 - SQLite state recovery after Durable Object eviction;
 - round alarms and post-expiry mutation rejection;
-- idempotent drawing batches and stale canvas versions;
+- one-primitive WebMCP enforcement, idempotent drawing calls, and stale canvas versions;
 - lobby eligibility, team alternation, artist rotation, scoring, and match completion;
 - private prompt absence from every shared pre-reveal payload;
 - human UI/WebMCP command parity;
@@ -32,9 +32,9 @@ Record the release commit and result:
 | Commit SHA | `22286702b30c05d4b56692ff882a747aa2a107a4` |
 | UTC timestamp | `2026-08-26T01:11:45Z` |
 | Node/npm | `v24.15.0` / `11.12.1` |
-| Tests | 35/35 passed across 4 Cloudflare Vitest files |
+| Tests | 48/48 passed across 4 Cloudflare Vitest files |
 | Typecheck | Passed (`tsc -b`) |
-| Production build | Passed — JS 320.37 kB / 95.55 kB gzip; CSS 41.32 kB / 9.57 kB gzip |
+| Production build | Passed (`vite build`) |
 
 ## 60-second judge-path rehearsal
 
@@ -42,16 +42,16 @@ Use a clean browser profile and the production domain.
 
 - [x] `https://mcpencil.com` loads over TLS with the expected CSP, WebMCP Permissions Policy, and no mixed content.
 - [ ] WebMCP support is detected and the user sees a ready state.
-- [ ] Agent calls `start_practice` and receives a separate opaque companion seat, not the human's identity.
+- [ ] Human creates Practice Pair and remains in a one-seat lobby until the agent calls `join_match` and connects with a separate opaque identity.
 - [ ] Round one assigns the companion agent as artist and the human as guesser.
 - [ ] Only agent-artist tools are registered; the prompt event is masked in the Lens.
-- [ ] Two or more `draw_batch` calls animate and acknowledge the applied canvas version.
+- [ ] Three or more `draw_stroke` calls each persist, broadcast, render, and acknowledge separately; no multi-stroke burst appears.
 - [ ] Human correct guess ends the round and reveals the answer once.
 - [ ] Round two assigns the human as artist and companion agent as guesser.
-- [ ] Old artist tools disappear; `submit_guess` appears for the agent seat.
+- [ ] Old artist tools disappear; `submit_guesses` appears for the agent seat only after the human prompt is hidden and the opening stroke lands.
 - [ ] Human prompt is private and is removed on round end.
-- [ ] Agent inspects the visible canvas and correctly calls `submit_guess`.
-- [ ] Results, replay, origins, time, stroke count, and tool-call count are coherent.
+- [ ] Agent inspects the visible canvas and calls `submit_guesses`; every submitted candidate is visible live.
+- [ ] Round result and final replay contain the complete exact guess transcript with player, provenance, correctness, and timing.
 - [ ] Whole flow completes in 60–90 seconds without manual recovery.
 
 Run at least five rehearsals. Target four clean first-attempt completions; the final three runs before recording must be clean.
@@ -69,9 +69,9 @@ Run at least five rehearsals. Target four clean first-attempt completions; the f
 | Guesser disconnect | 2+ | Other clients continue; reconnect gets missed version(s) | [ ] |
 | Durable Object eviction | test helper | Reconstructed object preserves state and scheduled round semantics | [ ] |
 | Simultaneous guesses | 2 guessers | One correct transition/score; later mutation receives round-ended result | [ ] |
-| Duplicate batch | 1 artist | Same idempotency key returns duplicate acknowledgement, no extra strokes | [ ] |
-| Stale batch | 2 artist sessions | Old expected version is rejected with current version guidance | [ ] |
-| Expired batch | 1 artist | Mutation after `endsAt` is rejected and round finalizes once | [ ] |
+| Duplicate stroke | 1 artist | Same idempotency key returns duplicate acknowledgement, no extra stroke | [ ] |
+| Stale stroke | 2 artist sessions | Old expected version is rejected with current version guidance | [ ] |
+| Expired stroke | 1 artist | Mutation after `endsAt` is rejected and round finalizes once | [ ] |
 
 ## Prompt-secrecy audit
 
@@ -114,7 +114,7 @@ Use the frozen set and protocol in [PROMPT_EVAL.md](PROMPT_EVAL.md).
 
 ### Agent draws / humans guess
 
-| Card | Correct | Time ms | Batches | Primitives | Tool errors | Failure tag/notes |
+| Card | Correct | Time ms | Strokes | Tool calls | Tool errors | Failure tag/notes |
 |---|---:|---:|---:|---:|---:|---|
 | G01 |  |  |  |  |  |  |
 | G02 |  |  |  |  |  |  |

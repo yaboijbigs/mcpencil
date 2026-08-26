@@ -16,9 +16,10 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 
 1. Open [mcpencil.com](https://mcpencil.com) in ChatGPT's in-app browser with **GPT-5.6 Sol or Terra** and choose **Practice Pair**.
 2. Ask: **“Join this practice and play both rounds with me. Use only the tools the page gives you.”**
-3. In round one, watch the WebMCP Lens: artist-only tools appear, the private prompt stays masked, and the agent calls `draw_batch`. Guess the picture in the game UI.
-4. In round two, memorize the private prompt and click **hide prompt & draw**. Only after the card is unmounted does the agent receive `submit_guess`; draw while it visually inspects the canvas.
-5. Open the result and replay panels. Compare human/WebMCP provenance, time-to-guess, strokes, and tool calls.
+3. The human-created room waits in its lobby until the agent calls `join_match`; only then does Practice Pair begin.
+4. In round one, watch the WebMCP Lens: the private prompt stays masked and each `draw_stroke` call produces exactly one immediately visible mark. Guess the picture in the game UI.
+5. In round two, memorize the private prompt and hide the card. Your first stroke starts the 90-second clock and registers `submit_guesses`; draw while the agent visually inspects each canvas update.
+6. Open the result and replay panels. Compare every guess, human/WebMCP provenance, time-to-guess, strokes, and tool calls.
 
 The entire path demonstrates both WebMCP directions without an app-owned bot, model API key, bot OAuth flow, or DOM automation.
 
@@ -49,24 +50,23 @@ Tools are registered imperatively with `document.modelContext.registerTool`. Per
 | `start_practice` | Landing/practice | Yes | Creates the two-round agent-draws/human-draws judge path and joins the caller. |
 | `join_match` | Landing/practice | Yes | Joins a five-character room code with a display name, team preference, and human/agent controller label. |
 | `start_match` | Lobby, host only | Yes | Starts an eligible match after server-side lobby validation. |
-| `get_draw_prompt` | Drawing, active artist only | No | Returns the private prompt for the caller's current round. |
-| `draw_batch` | Drawing, active artist only | Yes | Adds up to 12 validated vector primitives at an expected canvas version with an idempotency key. |
-| `undo_draw_batch` | Drawing, active artist only | Yes | Removes the caller's latest accepted batch at the expected canvas version. |
-| `submit_guess` | Drawing, eligible agent guesser | Yes | Submits one rate-limited guess and returns whether it ended the round. |
-| `get_round_result` | Round end | No | Returns the revealed answer, points, elapsed time, stroke count, and tool-call count. |
+| `draw_stroke` | Prepared/drawing round, active agent artist only | Yes | Commits exactly one validated primitive. The first stroke starts the 90-second clock; its acknowledgement supplies the next canvas version. |
+| `undo_last_stroke` | Prepared/drawing round, active agent artist only | Yes | Removes the caller's latest accepted stroke at the expected canvas version. |
+| `submit_guesses` | Drawing, eligible agent guesser | Yes | Submits 1–3 ordered, distinct guesses as real room actions, 350 ms apart, stopping on the first correct answer. Every accepted attempt is broadcast and retained. |
+| `get_round_result` | After any completed round | No | Returns the revealed answer, points, elapsed time, stroke count, tool-call count, and complete guess transcript. |
 | `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
 
 Between turns, agents can long-poll `get_match_state` with the last `revision` and `waitMs` up to 25 seconds. The call resolves on the next authoritative WebSocket update, so a new artist receives its private prompt immediately instead of noticing the turn on a later polling cycle.
 
-`draw_batch` accepts only `line`, `polyline`, `ellipse`, `rectangle`, `arc`, and `polygon` primitives on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are all enforced. Text, URLs, uploads, arbitrary SVG/path strings, and out-of-range geometry are rejected. Live WebMCP batches reveal their first primitive immediately, then visibly draw each remaining mark in order with adaptive backlog catch-up.
+`draw_stroke` accepts exactly one `line`, `polyline`, `ellipse`, `rectangle`, `arc`, or `polygon` primitive on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are enforced. Text, URLs, uploads, arbitrary SVG/path strings, out-of-range geometry, and multi-primitive WebMCP mutations are rejected before any write. Each successful call is persisted and broadcast before the tool acknowledges it, so spectators see the picture form stroke by stroke instead of receiving a late burst.
 
 ## Game modes
 
-- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby; `join_match` creates the agent’s distinct credential, and the clock starts only after both WebSockets connect. A same-page judge path safely retains the human and agent credentials separately; arena tabs are isolated with `sessionStorage`.
+- **Practice Pair:** a noncompetitive two-round proof path—agent draws, then human draws—designed to finish comfortably inside a judging session. Creating practice opens a one-seat lobby and does not start a game. `join_match` creates the agent’s distinct credential, and the first prepared round begins only after both WebSockets connect. Each round's 90-second clock starts with its first stroke.
 - **Team Arena:** two mixed teams of 2–4 seats play six 90-second rounds, alternating teams and rotating artists.
 - **Exhibition:** the Team Arena engine with controller labels arranged for humans-versus-agents or agent-versus-agent play.
 
-Only the active artist's teammates may guess. A correct answer awards `100 + remaining whole seconds`; wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers.
+Only the active artist's teammates may guess. A correct answer awards `100 + remaining whole seconds`; wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers. Prompt cards are dealt without replacement for the entire match.
 
 ## Architecture
 
@@ -142,7 +142,7 @@ After deployment, verify DNS/custom-domain activation in the same Cloudflare acc
 
 ## Security and integrity
 
-- A private artist prompt is returned only to the authenticated active artist, either in its role-safe state response or the fallback prompt tool. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guess` remains unregistered until the human explicitly hides and unmounts the prompt card.
+- A private artist prompt is returned only to the authenticated active artist through its role-safe `get_match_state` result or the private human card. It is excluded from shared snapshots, WebSocket payloads, activity details, replay events, and logs. In Practice round two, `submit_guesses` remains unregistered until the human hides and unmounts the prompt card and sends the opening stroke.
 - Anonymous seat credentials use opaque random tokens; only token hashes are persisted.
 - Names and guesses are length-limited data, never HTML or instructions.
 - Every mutation is authorized against room phase, seat, role, team, expiry, expected canvas version, and rate limits.

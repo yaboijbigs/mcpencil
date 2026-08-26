@@ -131,12 +131,21 @@ export function CanvasBoard({
       }
     }
 
-    // A live batch should start painting as soon as it reaches the browser. Hold
-    // only the remaining primitives so a twelve-shape call never pops in at once.
-    const immediateRevealId = revealQueueLengthRef.current === 0
+    // The normal WebMCP path is exactly one stroke per snapshot. Reveal that
+    // stroke immediately even if a reconnect queue is still draining. Multiple
+    // unseen strokes in one snapshot are treated strictly as catch-up data.
+    const liveStrokeId = progressiveIncomingIds.length === 1
       ? progressiveIncomingIds.shift() ?? null
       : null;
-    if (immediateRevealId !== null) setPencilEventId(immediateRevealId);
+    const catchUpIds = progressiveIncomingIds;
+    const immediateCatchUpId = liveStrokeId === null && revealQueueLengthRef.current === 0
+      ? catchUpIds.shift() ?? null
+      : null;
+    const immediateRevealIds = [liveStrokeId, immediateCatchUpId].filter(
+      (id): id is string => id !== null,
+    );
+    const pencilId = liveStrokeId ?? immediateCatchUpId;
+    if (pencilId !== null) setPencilEventId(pencilId);
 
     setRevealedEventIds((current) => {
       const next = new Set(Array.from(current).filter((id) => canonicalIds.has(id)));
@@ -145,7 +154,7 @@ export function CanvasBoard({
           next.add(event.id);
         }
       }
-      if (immediateRevealId !== null) next.add(immediateRevealId);
+      for (const eventId of immediateRevealIds) next.add(eventId);
       if (prefersReducedMotion) {
         for (const event of events) next.add(event.id);
       }
@@ -154,9 +163,10 @@ export function CanvasBoard({
 
     setRevealQueue((current) => {
       if (prefersReducedMotion) return [];
-      const next = current.filter((id) => canonicalIds.has(id));
+      const immediateIds = new Set(immediateRevealIds);
+      const next = current.filter((id) => canonicalIds.has(id) && !immediateIds.has(id));
       const queuedIds = new Set(next);
-      for (const eventId of progressiveIncomingIds) {
+      for (const eventId of catchUpIds) {
         if (!queuedIds.has(eventId)) {
           next.push(eventId);
           queuedIds.add(eventId);
@@ -329,8 +339,8 @@ export function CanvasBoard({
           type="button"
           onClick={() => void onUndo()}
           disabled={!canDraw || busy || events.length === 0}
-          title="Undo last batch"
-          aria-label="Undo last batch"
+          title="Undo last stroke"
+          aria-label="Undo last stroke"
         >
           <UndoIcon />
         </button>
@@ -389,7 +399,7 @@ export function CanvasBoard({
           <div className="empty-canvas-note" aria-hidden="true">
             <span className="pencil-scribble">✎</span>
             <strong>{artistLabel ? `${artistLabel} is thinking…` : "Waiting for the first stroke…"}</strong>
-            <small>Agent geometry animates here as it arrives.</small>
+            <small>Each WebMCP stroke appears the moment it arrives.</small>
           </div>
         ) : null}
         {(busy || localBusy) && <div className="ink-saving">inking…</div>}

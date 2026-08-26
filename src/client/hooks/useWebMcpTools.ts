@@ -6,6 +6,7 @@ import {
   isArtist,
   type CommandResult,
   type ControllerType,
+  type JoinRoomResponse,
   type PrivatePrompt,
   type RoomCommand,
   type RoomSnapshot,
@@ -36,7 +37,7 @@ interface UseWebMcpToolsOptions {
     name: string;
     team?: TeamId;
     controller: ControllerType;
-  }): Promise<void>;
+  }): Promise<JoinRoomResponse | void>;
 }
 
 const EmptySchema = { type: "object", properties: {}, additionalProperties: false };
@@ -67,11 +68,19 @@ const PrimitiveInputSchema = {
   additionalProperties: false,
 };
 
-const DrawInput = z.object({
+const DrawStrokeInput = z.object({
   expectedCanvasVersion: z.number().int().min(0).optional(),
-  idempotencyKey: z.string().trim().min(8).max(80).optional(),
-  primitives: z.array(PrimitiveSchema).min(1).max(12),
+  primitive: PrimitiveSchema,
 }).strict();
+
+const SubmitGuessesInput = z.object({
+  guesses: z.array(z.string().trim().min(1).max(80)).min(1).max(3),
+}).strict().superRefine(({ guesses }, context) => {
+  const normalized = guesses.map((guess) => guess.toLocaleLowerCase());
+  if (new Set(normalized).size !== normalized.length) {
+    context.addIssue({ code: "custom", path: ["guesses"], message: "Candidates must be distinct." });
+  }
+});
 
 const MatchStateInput = z.object({
   afterRevision: z.number().int().min(0).optional(),
@@ -91,7 +100,7 @@ interface ToolRegistration {
 interface StateWaiter {
   afterRevision: number;
   timeoutId: number;
-  signal: AbortSignal;
+  signal?: AbortSignal;
   onAbort: () => void;
   resolve: (snapshot: RoomSnapshot | null) => void;
   reject: (reason: unknown) => void;
@@ -122,16 +131,18 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   const registrationRetriesRef = useRef(new Map<string, number>());
   const retryTimersRef = useRef(new Map<string, number>());
   const stateWaitersRef = useRef(new Set<StateWaiter>());
+  const privatePromptCacheRef = useRef(new Map<string, Promise<PrivatePrompt>>());
+  const drawStrokeChainRef = useRef<Promise<void>>(Promise.resolve());
 
   const settleStateWaiter = (waiter: StateWaiter, value: RoomSnapshot | null, reason?: unknown) => {
     if (!stateWaitersRef.current.delete(waiter)) return;
     window.clearTimeout(waiter.timeoutId);
-    waiter.signal.removeEventListener("abort", waiter.onAbort);
+    waiter.signal?.removeEventListener("abort", waiter.onAbort);
     if (reason === undefined) waiter.resolve(value);
     else waiter.reject(reason);
   };
 
-  const waitForRevision = (afterRevision: number, waitMs: number, signal: AbortSignal) => {
+  const waitForRevision = (afterRevision: number, waitMs: number, signal?: AbortSignal) => {
     const current = snapshotRef.current;
     if (current === null || current.revision > afterRevision || waitMs === 0) return Promise.resolve(current);
     return new Promise<RoomSnapshot | null>((resolve, reject) => {
@@ -153,14 +164,31 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         waitMs,
       );
       stateWaitersRef.current.add(waiter);
-      signal.addEventListener("abort", waiter.onAbort, { once: true });
-      if (signal.aborted) {
+      signal?.addEventListener("abort", waiter.onAbort, { once: true });
+      if (signal?.aborted) {
         waiter.onAbort();
         return;
       }
       const latest = snapshotRef.current;
       if (latest !== null && latest.revision > afterRevision) settleStateWaiter(waiter, latest);
     });
+  };
+
+  const cachedPrivatePrompt = (
+    activeSnapshot: RoomSnapshot,
+    activeSeatId: string,
+    signal?: AbortSignal,
+  ) => {
+    const key = `${activeSnapshot.roomCode}:${activeSnapshot.roundIndex}:${activeSeatId}`;
+    const cached = privatePromptCacheRef.current.get(key);
+    if (cached) return cached;
+    let request: Promise<PrivatePrompt>;
+    request = actionsRef.current.privatePrompt(signal).catch((reason) => {
+      if (privatePromptCacheRef.current.get(key) === request) privatePromptCacheRef.current.delete(key);
+      throw reason;
+    });
+    privatePromptCacheRef.current.set(key, request);
+    return request;
   };
 
   useEffect(() => {
@@ -277,7 +305,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   const run = async <T,>(
     name: string,
     input: Record<string, unknown>,
-    executionSignal: AbortSignal,
+    executionSignal: AbortSignal | undefined,
     operation: (signal: AbortSignal) => Promise<T> | T,
     summarizeOutput: (output: T) => string = () => "Accepted",
   ) => {
@@ -285,6 +313,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     if (!availableToolsRef.current.has(name) || !registration || registration.controller.signal.aborted) {
       throw new Error("This tool is no longer available for your current role. Inspect match state and use the newly listed tools.");
     }
+    const signal = executionSignal ?? registration.controller.signal;
     registration.inFlight += 1;
     const startedAt = Date.now();
     const id = crypto.randomUUID();
@@ -301,7 +330,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     try {
       // Authorization is checked above at invocation start. Once accepted, an in-flight
       // mutation is allowed to finish even if its authoritative snapshot changes the role.
-      const output = await operation(executionSignal);
+      const output = await operation(signal);
       const outputVersion = canvasVersionFrom(output);
       if (outputVersion !== null) versionRef.current = Math.max(versionRef.current, outputVersion);
       const outputSummary = summarizeOutput(output);
@@ -328,7 +357,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
     tool({
       name: "get_match_state",
       title: "Inspect MCPencil match",
-      description: "Read current role and turn data. Between turns, pass afterRevision plus waitMs up to 25000 to resolve on the next WebSocket update instead of polling. Agent artists receive authorized privatePrompt; guessers receive compact canvasGeometry and recentGuesses.",
+      description: "Canonical turn tool. Read role, structured nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between actions, pass afterRevision and waitMs 25000 so the next WebSocket update wakes this call. Guessers also receive compact canvasGeometry and recentGuesses.",
       inputSchema: {
         type: "object",
         properties: {
@@ -338,8 +367,8 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
         additionalProperties: false,
       },
       annotations: { readOnlyHint: true, untrustedContentHint: true },
-      execute: (input, { signal }) =>
-        run("get_match_state", input, signal, async () => {
+      execute: (input, options) =>
+        run("get_match_state", input, options?.signal, async (signal) => {
           const parsed = MatchStateInput.parse(input);
           const currentSnapshot = parsed.afterRevision === undefined
             ? snapshotRef.current
@@ -352,12 +381,17 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
               : {}),
           };
           if (!isActiveAgentArtist(currentSnapshot, currentSeatId)) return state;
-          const prompt = await actionsRef.current.privatePrompt(signal);
+          const prompt = await cachedPrivatePrompt(currentSnapshot, currentSeatId!, signal);
           return {
             ...state,
             privatePrompt: prompt.prompt,
             promptCategory: prompt.category,
-            drawNow: "Within 5 seconds, call draw_batch with only 2-4 primitives that show the broad silhouette. Do not inspect the blank canvas or plan/refine first. Add detail afterward in 3-6 primitive batches.",
+            nextAction: {
+              tool: "draw_stroke",
+              instruction: "Do not narrate, inspect the blank canvas, or plan the whole drawing. Send ONE high-information stroke now; after its acknowledgement, immediately send the next stroke.",
+            },
+            urgency: "immediate",
+            deadline: currentSnapshot.endsAt,
           };
         }, () => isActiveAgentArtist(snapshotRef.current, seatIdRef.current)
           ? `State and private prompt delivered at canvas v${versionRef.current} · prompt masked`
@@ -375,7 +409,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
           type: "object", properties: { name: { type: "string", minLength: 1, maxLength: 24, description: "Your display name." } },
           required: ["name"], additionalProperties: false,
         },
-        execute: (input, { signal }) => run("start_practice", input, signal, async () => {
+        execute: (input, options) => run("start_practice", input, options?.signal, async () => {
           const name = z.string().trim().min(1).max(24).parse(input.name);
           await actionsRef.current.startPractice(name);
           return { accepted: true, next: "Call get_match_state." };
@@ -402,7 +436,7 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
           additionalProperties: false,
         },
         annotations: { untrustedContentHint: true },
-        execute: (input, { signal }) => run("join_match", input, signal, async () => {
+        execute: (input, options) => run("join_match", input, options?.signal, async (signal) => {
           const parsed = z.object({
             roomCode: z.string().trim().toUpperCase().regex(/^[A-Z2-9]{5}$/).optional(),
             name: z.string().trim().min(1).max(24),
@@ -415,12 +449,26 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
           const roomCode = parsed.roomCode ?? currentLobbyCode ?? roomCodeFromUrl();
           if (!roomCode) throw new Error("roomCode is required when the page URL has no valid ?room= code.");
           const controller = parsed.controller ?? "agent";
-          await actionsRef.current.joinMatch({ ...parsed, roomCode, controller });
+          const response = await actionsRef.current.joinMatch({ ...parsed, roomCode, controller });
+          const joinedSnapshot = response?.snapshot
+            ?? (snapshotRef.current?.roomCode === roomCode ? snapshotRef.current : null);
+          const joinedSeatId = response?.seatId ?? seatIdRef.current;
+          let state: Record<string, unknown> = compactWebMcpState(joinedSnapshot, joinedSeatId);
+          if (response && isActiveAgentArtist(response.snapshot, response.seatId)) {
+            const prompt = await cachedPrivatePrompt(response.snapshot, response.seatId, signal);
+            state = {
+              ...state,
+              privatePrompt: prompt.prompt,
+              promptCategory: prompt.category,
+            };
+          }
           return {
             accepted: true,
             roomCode,
             controller,
-            next: "Your seat is ready automatically. Call get_match_state now, then keep one call pending with afterRevision and waitMs: 25000. A role change will wake it immediately; if privatePrompt is present, skip get_draw_prompt and draw within 5 seconds.",
+            revision: joinedSnapshot?.revision ?? null,
+            state,
+            next: "Act on state.nextAction immediately. Between turns, keep get_match_state pending with this revision as afterRevision and waitMs 25000.",
           };
         }),
       }),
@@ -430,109 +478,142 @@ export function useWebMcpTools({ snapshot, seatId, guessesEnabled = true, comman
   if (availableTools.has("start_match")) definitions.push(tool({
     name: "start_match", title: "Start MCPencil match", description: "Start once both teams have two live, ready players. Agent seats are ready automatically.",
     inputSchema: EmptySchema,
-    execute: (input, { signal }) => run("start_match", input, signal, () => actionsRef.current.command({ type: "start_match", origin: "webmcp" }, signal), compactCommand),
+    execute: (input, options) => run("start_match", input, options?.signal, (signal) => actionsRef.current.command({ type: "start_match", origin: "webmcp" }, signal), compactCommand),
   }));
 
-  if (availableTools.has("get_draw_prompt")) {
+  if (availableTools.has("draw_stroke")) {
     definitions.push(
       tool({
-        name: "get_draw_prompt", title: "Read private drawing prompt",
-        description: "Fallback only: read the secret prompt if get_match_state did not already return privatePrompt. Never disclose it; communicate only through drawing tools.",
-        inputSchema: EmptySchema, annotations: { readOnlyHint: true },
-        execute: (input, { signal }) => run("get_draw_prompt", input, signal, async () => {
-          const prompt = await actionsRef.current.privatePrompt(signal);
-          return {
-            ...prompt,
-            canvasVersion: versionRef.current,
-            remainingMs: remainingMs(snapshotRef.current),
-            guidance: "Within 5 seconds, send only 2-4 primitives for the broad silhouette. Do not inspect the blank canvas or plan/refine first. Then chain each returned canvasVersion into 3-6 primitive refinement batches without another state read.",
-          };
-        }, () => "Private prompt delivered with fast-turn state (masked in Lens)"),
-      }),
-      tool({
-        name: "draw_batch", title: "Draw vector primitives",
-        description: "Draw on the 1000x700 canvas. First call: immediately send only 2-4 primitives for a broad silhouette within 5 seconds of privatePrompt; do not inspect the blank canvas or plan/refine first. Later calls may add 3-6 primitives. Chain response.canvasVersion without another state read.",
+        name: "draw_stroke", title: "Draw one stroke now",
+        description: "Draw exactly ONE primitive on the 1000x700 canvas. Do not narrate, inspect the blank canvas, prepare multiple commands, or plan the full picture. Immediately send one high-information silhouette stroke. When it is acknowledged, immediately call draw_stroke again with the next stroke and the returned canvasVersion. Each call becomes visible to every player before the next call.",
         inputSchema: {
           type: "object",
           properties: {
-            expectedCanvasVersion: { type: "integer", minimum: 0, description: "Optional; defaults to the latest client version. Prefer the prior draw_batch response.canvasVersion." },
-            idempotencyKey: { type: "string", minLength: 8, maxLength: 80, description: "Optional; a UUID-based key is generated when omitted." },
-            primitives: { type: "array", minItems: 1, maxItems: 12, items: PrimitiveInputSchema },
+            expectedCanvasVersion: { type: "integer", minimum: 0, description: "Optional. Omit on the first stroke; afterward use the prior draw_stroke response.canvasVersion." },
+            primitive: PrimitiveInputSchema,
           },
-          required: ["primitives"], additionalProperties: false,
+          required: ["primitive"], additionalProperties: false,
         },
-        execute: (input, { signal }) => run("draw_batch", input, signal, async () => {
-          const parsed = DrawInput.parse(input);
-          const expectedVersion = parsed.expectedCanvasVersion ?? versionRef.current;
-          const idempotencyKey = parsed.idempotencyKey ?? `webmcp-${crypto.randomUUID()}`;
-          const payload = DrawBatchCommandSchema.parse({
-            type: "draw_batch", expectedVersion, idempotencyKey, primitives: parsed.primitives, origin: "webmcp",
-          });
-          const result = await actionsRef.current.command(payload, signal);
-          return {
-            ...result,
-            guidance: `Continue immediately; use canvasVersion ${result.canvasVersion} as the next expectedCanvasVersion without another state read.`,
+        execute: (input, options) => run("draw_stroke", input, options?.signal, (signal) => {
+          const parsed = DrawStrokeInput.parse(input);
+          const draw = async () => {
+            if (signal.aborted) throw new DOMException("The stroke was cancelled.", "AbortError");
+            const expectedVersion = Math.max(parsed.expectedCanvasVersion ?? 0, versionRef.current);
+            const payload = DrawBatchCommandSchema.parse({
+              type: "draw_batch",
+              expectedVersion,
+              idempotencyKey: `webmcp-stroke-${crypto.randomUUID()}`,
+              primitives: [parsed.primitive],
+              origin: "webmcp",
+            });
+            const result = await actionsRef.current.command(payload, signal);
+            return {
+              ...result,
+              guidance: `Stroke visible. Immediately call draw_stroke again with ONE next stroke and expectedCanvasVersion ${result.canvasVersion}; do not narrate or pause to plan.`,
+            };
           };
+          const queued = drawStrokeChainRef.current.then(draw, draw);
+          drawStrokeChainRef.current = queued.then(() => undefined, () => undefined);
+          return queued;
         }, compactCommand),
       }),
       tool({
-        name: "undo_draw_batch", title: "Undo last drawing batch",
-        description: "Remove your most recent drawing batch from this round when it needs correction.",
-        inputSchema: { type: "object", properties: { expectedCanvasVersion: { type: "integer", minimum: 0 } }, required: ["expectedCanvasVersion"], additionalProperties: false },
-        execute: (input, { signal }) => run("undo_draw_batch", input, signal, () => actionsRef.current.command({ type: "undo_draw_batch", expectedVersion: z.number().int().min(0).parse(input.expectedCanvasVersion), origin: "webmcp" }, signal), compactCommand),
+        name: "undo_last_stroke", title: "Undo your last stroke",
+        description: "Remove your most recently accepted WebMCP stroke from this round, then resume drawing one stroke at a time.",
+        inputSchema: { type: "object", properties: { expectedCanvasVersion: { type: "integer", minimum: 0, description: "Optional; defaults to the latest acknowledged canvasVersion." } }, additionalProperties: false },
+        execute: (input, options) => run("undo_last_stroke", input, options?.signal, (signal) => actionsRef.current.command({
+          type: "undo_draw_batch",
+          expectedVersion: z.number().int().min(0).optional().parse(input.expectedCanvasVersion) ?? versionRef.current,
+          origin: "webmcp",
+        }, signal), compactCommand),
       }),
     );
   }
 
-  if (availableTools.has("submit_guess")) definitions.push(tool({
-    name: "submit_guess", title: "Submit a drawing guess",
-    description: "Guess the broad object or action as soon as recognizable strokes appear. If wrong, wait for canvasVersion to change, inspect the canvas again, and refine; wrong guesses are rate-limited.",
-    inputSchema: { type: "object", properties: { guess: { type: "string", minLength: 1, maxLength: 80, description: "Your concise best answer." } }, required: ["guess"], additionalProperties: false },
+  if (availableTools.has("submit_guesses")) definitions.push(tool({
+    name: "submit_guesses", title: "Submit up to three visible guesses",
+    description: "Visually inspect the rendered canvas, then immediately submit 1-3 concise, ordered, distinct candidates. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer. After an incorrect result, reconsider the whole drawing when canvasVersion changes instead of fixating on the first idea.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        guesses: {
+          type: "array", minItems: 1, maxItems: 3, uniqueItems: true,
+          items: { type: "string", minLength: 1, maxLength: 80 },
+          description: "Best candidate first, followed by at most two genuinely different alternatives.",
+        },
+      },
+      required: ["guesses"], additionalProperties: false,
+    },
     annotations: { untrustedContentHint: true },
-    execute: (input, { signal }) => run("submit_guess", input, signal, async () => {
-      const result = await actionsRef.current.command({ type: "submit_guess", guess: z.string().trim().min(1).max(80).parse(input.guess), origin: "webmcp" }, signal);
+    execute: (input, options) => run("submit_guesses", input, options?.signal, async (signal) => {
+      const { guesses } = SubmitGuessesInput.parse(input);
+      const attempts: Array<{
+        guess: string;
+        correct: boolean;
+        close: boolean;
+        revision: number;
+        canvasVersion: number;
+      }> = [];
+      let lastResult: CommandResult | null = null;
+      for (const [index, guess] of guesses.entries()) {
+        if (index > 0) await waitAtLeast(350, signal);
+        const result = await actionsRef.current.command({ type: "submit_guess", guess, origin: "webmcp" }, signal);
+        lastResult = result;
+        attempts.push({
+          guess,
+          correct: result.correct === true,
+          close: result.close === true,
+          revision: result.revision,
+          canvasVersion: result.canvasVersion,
+        });
+        if (result.correct) break;
+      }
+      const correct = attempts.some((attempt) => attempt.correct);
       return {
-        ...result,
-        guidance: result.correct
+        accepted: true,
+        attempts,
+        correct,
+        revision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0,
+        canvasVersion: lastResult?.canvasVersion ?? versionRef.current,
+        remainingMs: lastResult?.remainingMs ?? remainingMs(snapshotRef.current),
+        guidance: correct
           ? "Correct."
-          : result.close
-            ? `Close—refine after the canvasVersion advances beyond ${result.canvasVersion} and new strokes appear.`
-            : `Not correct. Wait for the canvasVersion to advance beyond ${result.canvasVersion}, inspect the new strokes, then retry with a refined guess.`,
+          : `All ${attempts.length} guesses were displayed. Wait for a newer canvasVersion, visually inspect the full rendered canvas again, then submit new candidates.`,
       };
-    }, (output) => `${output.correct ? "Correct" : output.close ? "Close—refine after new strokes" : "Not correct"}; canvas v${output.canvasVersion}`),
+    }, (output) => `${output.correct ? "Correct" : `${output.attempts.length} guesses displayed`}; canvas v${output.canvasVersion}`),
   }));
 
   if (availableTools.has("get_round_result")) {
     definitions.push(tool({
       name: "get_round_result", title: "Read round result",
-      description: "Read the revealed prompt, winner, points, timing, strokes, and tool usage for the completed round.",
+      description: "Read the most recently completed round's revealed prompt, winner, points, timing, strokes, and tool usage. This remains available during the following round.",
       inputSchema: EmptySchema, annotations: { readOnlyHint: true, untrustedContentHint: true },
-      execute: (input, { signal }) => run("get_round_result", input, signal, () => snapshotRef.current?.roundResult ?? { status: "No result" }, () => "Round result read"),
-    }));
-    if (availableTools.has("ready_next")) definitions.push(tool({
-      name: "ready_next", title: "Ready for next round", description: "Confirm that your seat is ready for the next round.",
-      inputSchema: EmptySchema,
-      execute: (input, { signal }) => run("ready_next", input, signal, async () => {
-        const activeSnapshot = snapshotRef.current;
-        const readyKey = activeSnapshot ? `${activeSnapshot.roomCode}:${activeSnapshot.roundIndex}` : null;
-        if (readyKey) setConsumedReadyNextKey(readyKey);
-        try {
-          const result = await actionsRef.current.command({
-            type: "ready_next",
-            expectedRoundIndex: activeSnapshot?.roundIndex ?? 0,
-            origin: "webmcp",
-          }, signal);
-          return {
-            ...result,
-            next: "Call get_match_state once now. If it is still round-end, call it again with that state's revision as afterRevision and waitMs: 25000; it will wake on the next round and include privatePrompt if you are the artist.",
-          };
-        } catch (reason) {
-          if (readyKey) setConsumedReadyNextKey((current) => current === readyKey ? null : current);
-          throw reason;
-        }
-      }, compactCommand),
+      execute: (input, options) => run("get_round_result", input, options?.signal, () => snapshotRef.current?.roundResult ?? { status: "No result" }, () => "Round result read"),
     }));
   }
+  if (availableTools.has("ready_next")) definitions.push(tool({
+    name: "ready_next", title: "Ready for next round", description: "Confirm that your seat is ready for the next round. This tool is only available during the results intermission while your seat is unready.",
+    inputSchema: EmptySchema,
+    execute: (input, options) => run("ready_next", input, options?.signal, async (signal) => {
+      const activeSnapshot = snapshotRef.current;
+      const readyKey = activeSnapshot ? `${activeSnapshot.roomCode}:${activeSnapshot.roundIndex}` : null;
+      if (readyKey) setConsumedReadyNextKey(readyKey);
+      try {
+        const result = await actionsRef.current.command({
+          type: "ready_next",
+          expectedRoundIndex: activeSnapshot?.roundIndex ?? 0,
+          origin: "webmcp",
+        }, signal);
+        return {
+          ...result,
+          next: "Call get_match_state with this revision as afterRevision and waitMs 25000. It will wake for round prep and include privatePrompt if you are the artist.",
+        };
+      } catch (reason) {
+        if (readyKey) setConsumedReadyNextKey((current) => current === readyKey ? null : current);
+        throw reason;
+      }
+    }, compactCommand),
+  }));
 
   useEffect(() => {
     const context = document.modelContext;
@@ -636,14 +717,34 @@ function roomCodeFromUrl(): string | null {
   return /^[A-Z2-9]{5}$/.test(value) ? value : null;
 }
 
+function waitAtLeast(delayMs: number, signal: AbortSignal) {
+  if (signal.aborted) return Promise.reject(new DOMException("The guess sequence was cancelled.", "AbortError"));
+  return new Promise<void>((resolve, reject) => {
+    const finish = () => {
+      signal.removeEventListener("abort", cancel);
+      resolve();
+    };
+    const timer = window.setTimeout(finish, delayMs);
+    const cancel = () => {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", cancel);
+      reject(new DOMException("The guess sequence was cancelled.", "AbortError"));
+    };
+    signal.addEventListener("abort", cancel, { once: true });
+  });
+}
+
 function summarizeInput(name: string, input: Record<string, unknown>) {
-  if (name === "get_draw_prompt") return "Private prompt request · content masked";
-  if (name === "draw_batch") {
-    const count = Array.isArray(input.primitives) ? input.primitives.length : 0;
-    const key = input.idempotencyKey ? `${String(input.idempotencyKey).slice(0, 10)}…` : "auto-generated";
-    return `${count} primitive${count === 1 ? "" : "s"} · key ${key}`;
+  if (name === "draw_stroke") {
+    const primitive = typeof input.primitive === "object" && input.primitive !== null
+      ? input.primitive as Record<string, unknown>
+      : null;
+    return `1 ${String(primitive?.type ?? "stroke")} · unique key generated`;
   }
-  if (name === "submit_guess") return `Guess: “${String(input.guess ?? "").slice(0, 36)}”`;
+  if (name === "submit_guesses") {
+    const guesses = Array.isArray(input.guesses) ? input.guesses : [];
+    return guesses.map((guess) => `“${String(guess).slice(0, 24)}”`).join(" → ");
+  }
   const keys = Object.keys(input);
   return keys.length ? keys.map((key) => `${key}: ${String(input[key]).slice(0, 24)}`).join(" · ") : "No input";
 }

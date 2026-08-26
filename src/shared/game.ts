@@ -3,6 +3,9 @@ import { z } from "zod";
 export const CANVAS_WIDTH = 1000;
 export const CANVAS_HEIGHT = 700;
 export const ROUND_DURATION_MS = 90_000;
+export const ROUND_PREP_DURATION_MS = 8_000;
+export const ROUND_RESULT_MIN_MS = 8_000;
+export const ROUND_RESULT_MAX_MS = 15_000;
 export const TEAM_ROUND_COUNT = 6;
 export const MAX_BATCH_PRIMITIVES = 12;
 
@@ -18,7 +21,7 @@ export type ActionOrigin = (typeof ORIGINS)[number];
 export type PaletteColor = (typeof PALETTE)[number];
 export type StrokeWidth = (typeof STROKE_WIDTHS)[number];
 export type RoomMode = "practice" | "arena" | "exhibition";
-export type MatchPhase = "lobby" | "drawing" | "round-end" | "match-end";
+export type MatchPhase = "lobby" | "round-prep" | "drawing" | "round-end" | "match-end";
 
 const Coordinate = z.number().finite().min(0).max(1000);
 const Radius = z.number().finite().min(1).max(1000);
@@ -296,7 +299,9 @@ export type ServerEvent =
   | { type: "error"; code: string; message: string };
 
 export function isArtist(snapshot: RoomSnapshot, seatId: string | null): boolean {
-  return seatId !== null && snapshot.artistSeatId === seatId && snapshot.phase === "drawing";
+  return seatId !== null
+    && snapshot.artistSeatId === seatId
+    && (snapshot.phase === "round-prep" || snapshot.phase === "drawing");
 }
 
 export function canGuess(snapshot: RoomSnapshot, seatId: string | null): boolean {

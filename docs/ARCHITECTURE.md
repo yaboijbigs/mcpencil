@@ -46,10 +46,11 @@ One Durable Object alarm represents the current round deadline. Starting or adva
 ```mermaid
 stateDiagram-v2
     [*] --> Lobby: create room
-    Lobby --> Drawing: host starts eligible match
+    Lobby --> RoundPrep: eligible match starts
+    RoundPrep --> Drawing: first stroke or prep alarm
     Drawing --> RoundEnd: correct guess
     Drawing --> RoundEnd: deadline alarm
-    RoundEnd --> Drawing: next round ready
+    RoundEnd --> RoundPrep: next round ready or result deadline
     RoundEnd --> MatchEnd: final round
     MatchEnd --> [*]
 ```
@@ -57,8 +58,9 @@ stateDiagram-v2
 Server invariants:
 
 - `lobby`: no prompt is accessible; only readiness, seat configuration, and host start are mutable.
+- `round-prep`: the artist may access the private prompt and send one opening stroke, but guessing is disabled and the 90-second round clock has not started. An eight-second alarm prevents a stalled artist from freezing the room.
 - `drawing`: exactly one artist and one active team exist; `endsAt` is persisted; only the artist may draw; only active-team non-artists may guess.
-- `round-end`: drawing and guessing are immutable; the answer may be revealed in a round result; eligible players may ready for the next round.
+- `round-end`: drawing and guessing are immutable; the answer and full guess transcript are visible for at least eight seconds. All connected players may advance it after that minimum; a 15-second hard deadline advances it automatically.
 - `match-end`: scores, analytics, and replay are immutable.
 
 Practice Pair uses the same phases and command schemas with a two-round schedule. Team Arena and Exhibition use six rounds and classic artist rotation.
@@ -100,9 +102,9 @@ Allowed primitives:
 - circular arc;
 - polygon (3–24 points).
 
-Each primitive uses an enumerated palette and stroke width, with an optional enumerated fill. A `draw_batch` contains 1–12 primitives and an idempotency key. Arbitrary SVG paths, markup, text, URLs, images, filters, event attributes, and external references never enter the renderer.
+Each primitive uses an enumerated palette and stroke width, with an optional enumerated fill. The public `draw_stroke` WebMCP tool accepts exactly one primitive and generates a bounded idempotency key. The shared internal drawing command can represent human UI work, but the room rejects every WebMCP-origin mutation whose primitive count is not exactly one before persistence. Arbitrary SVG paths, markup, text, URLs, images, filters, event attributes, and external references never enter the renderer.
 
-The persisted canvas event stream is canonical. Live rendering, reconnect catch-up, replay, stroke counts, and analytics derive from those events rather than independent client state. Undo removes or tombstones an entire last batch so partial agent calls cannot leave ambiguous state.
+The persisted canvas event stream is canonical. Live rendering, reconnect catch-up, replay, stroke counts, and analytics derive from those events rather than independent client state. Each agent tool acknowledgement follows its corresponding persisted broadcast, and undo removes the caller's last accepted stroke.
 
 ## Realtime and reconnects
 
@@ -125,15 +127,15 @@ flowchart LR
     ACK --> RESULT[Compact tool result + Lens entry]
 ```
 
-Changing role, phase, room, or seat aborts the prior registration scope. Chrome does not terminate an invocation merely because its tool registration was removed, so handlers also forward the invocation's own execution signal, compare a captured generation before accepting local results, and rely on current server-side role, phase, round-expiry, and canvas-version authorization. `get_match_state` is always role-safe. `get_draw_prompt` is registered only for the active artist, and the Worker independently enforces that authorization.
+Changing role, phase, room, or seat aborts the prior registration scope. Chrome does not terminate an invocation merely because its tool registration was removed, so handlers also forward the invocation's own execution signal, compare a captured generation before accepting local results, and rely on current server-side role, phase, round-expiry, and canvas-version authorization. `get_match_state` is always role-safe and includes the private prompt only for the authenticated active agent artist. Artist calls to `draw_stroke` are serialized locally and version-chained; the Worker independently enforces the one-primitive invariant.
 
-Practice Pair is one authoritative two-seat session on one page. Creation returns one opaque human credential plus a distinct opaque agent-companion credential. Human controls always send the human token with `human-ui` origin; WebMCP tools always send the companion token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them.
+Practice Pair is one authoritative two-seat session on one page. The human creates a waiting one-seat room, then `join_match` returns a distinct opaque agent credential. The room starts only after both authenticated WebSockets connect. Human controls always send the human token with `human-ui` origin; WebMCP tools always send the companion token with `webmcp` origin. The backend authorizes them as separate identities and rotates the artist between them.
 
 Tool outputs are concise and structured. Player-created names and guesses are labeled untrusted content. Tool descriptions explain when a call is appropriate but do not echo user-authored content into instructions.
 
 ## Prompt secrecy
 
-The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a drawing phase it may leave the room only through the private prompt route/tool after token, seat, round, phase, and artist checks. In Practice round two, the human artist reveal occupies a private UI subtree while the agent's `submit_guess` registration is withheld. The human must explicitly memorize and hide the card; React unmounts the answer before the guess tool is registered.
+The answer is server-owned and is not a property of the shared `RoomSnapshot`. During a prepared or drawing phase it may leave the room only through a role-safe active-artist response after token, seat, round, phase, and artist checks. In Practice round two, the human artist reveal occupies a private UI subtree while the agent's `submit_guesses` registration is withheld. The human must explicitly memorize and hide the card; React unmounts the answer, and the first visible stroke starts the clock and enables guessing.
 
 The following surfaces are explicitly prompt-free until round end:
 

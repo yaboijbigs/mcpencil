@@ -31,29 +31,29 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 ### 0:25–0:40 — agent joins and role tools appear
 
-**Picture:** In ChatGPT, send: “Join this practice and play both rounds with me. Use only the tools this page provides.” The agent calls `start_practice`. Expand the Lens as the lobby tools switch to artist tools.
+**Picture:** The human clicks **Practice Pair**, receives a room code, and sends: “Join this practice and play both rounds with me. Use only the tools this page provides.” The agent calls `join_match`. The waiting lobby starts only after the agent connects; expand the Lens as artist tools appear.
 
 **Narration:** “The agent joins through WebMCP. Tool registration is dynamic: as its role changes, obsolete tools disappear and only legal actions remain.”
 
-**Lens close-up:** `get_match_state`, `get_draw_prompt`, `draw_batch`, `undo_draw_batch`; prompt event visibly reads `MASKED`.
+**Lens close-up:** `get_match_state`, `draw_stroke`, `undo_last_stroke`; prompt event visibly reads `MASKED`.
 
 ### 0:40–1:05 — agent draws, human guesses
 
-**Picture:** Agent calls `get_draw_prompt`, then two or three compact `draw_batch` calls. Show strokes animating on the paper canvas. Enter the correct human guess before time expires; show points.
+**Picture:** Agent reads its role-safe state, then immediately calls `draw_stroke` several times. Keep the Lens and canvas together so every acknowledgement visibly precedes the next stroke. Enter the correct human guess before time expires; show points.
 
 **Narration:** “The secret answer goes only to the active artist. The agent cannot ask to ‘draw it.’ It must compose bounded lines, shapes, and polygons on a normalized canvas. The server checks role, time, version, rate, and idempotency before committing and broadcasting every stroke.”
 
-**Lens close-up:** Accepted result with `batchId`, `canvasVersion`, and `remainingMs`.
+**Lens close-up:** Accepted result with `batchId`, `canvasVersion`, and `remainingMs`; input summary says one primitive.
 
 ### 1:05–1:20 — reverse roles
 
-**Picture:** Round transition. The private human card appears while the Lens visibly withholds `submit_guess`. Click **hide prompt & draw**; the card unmounts, then `submit_guess` appears and drawing begins.
+**Picture:** Round transition remains readable for its minimum display time. The private human card appears while the Lens withholds `submit_guesses`. Hide the card and place the opening stroke; the 90-second clock begins and `submit_guesses` appears.
 
 **Narration:** “Now the exact same room reverses direction. The artist tools disappear. The agent becomes a guesser—and never receives the answer.”
 
 ### 1:20–1:45 — human draws, agent guesses visually
 
-**Picture:** Human uses pen plus one shape control. Agent inspects the visible canvas, calls `submit_guess`, and lands the answer. Show celebratory score/sound, but do not obscure the call result.
+**Picture:** Human uses pen plus one shape control. Agent inspects the visible canvas, calls `submit_guesses`, and lands the answer. Keep its full visible guess trail on screen, then show the same transcript in the final replay.
 
 **Narration:** “I draw with pointer controls. The agent must interpret what it can actually see and submit a normal, rate-limited guess through WebMCP. There is no hosted model, API key, bot OAuth, or DOM automation inside MCPencil.”
 
@@ -96,7 +96,7 @@ The video should be one continuous argument: WebMCP turns a website into a place
 
 - Clean MCPencil logo reveal with pencil sound.
 - Lens close-up showing a tool-set swap.
-- Accepted `draw_batch` result with no private prompt in the event stream.
+- Accepted singular `draw_stroke` result with no private prompt in the event stream.
 - Human pointer stroke synced in a second browser.
 - Replay scrub and analytics close-up.
 - Architecture graphic.

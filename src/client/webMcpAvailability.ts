@@ -17,22 +17,29 @@ export function webMcpToolNames(
     if (seat.isHost) names.push("start_match");
   }
   if (hasAgentSeat && isArtist(snapshot, seatId)) {
-    names.push("get_draw_prompt", "draw_batch", "undo_draw_batch");
+    names.push("draw_stroke", "undo_last_stroke");
   }
   if (hasAgentSeat && guessesEnabled && canGuess(snapshot, seatId)) {
-    names.push("submit_guess");
+    names.push("submit_guesses");
   }
-  if (snapshot.phase === "round-end" || snapshot.phase === "match-end") {
+  if (snapshot.roundResult !== null) {
     names.push("get_round_result");
-    if (snapshot.phase === "round-end" && hasAgentSeat && !seat.isReady) names.push("ready_next");
   }
+  if (snapshot.phase === "round-end" && hasAgentSeat && !seat.isReady) names.push("ready_next");
   return names;
 }
 
 export function compactWebMcpState(snapshot: RoomSnapshot | null, seatId: string | null) {
-  if (!snapshot) return { phase: "landing", availableActions: ["start_practice", "join_match"] };
+  if (!snapshot) return {
+    phase: "landing",
+    availableActions: ["start_practice", "join_match"],
+    nextAction: { tool: "join_match", instruction: "Join the room identified by the page URL." },
+    urgency: "immediate",
+    deadline: null,
+  };
   const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
-  const role = snapshot.artistSeatId === seatId ? "artist" : canGuess(snapshot, seatId) ? "guesser" : "spectator";
+  const role = isArtist(snapshot, seatId) ? "artist" : canGuess(snapshot, seatId) ? "guesser" : "spectator";
+  const action = compactNextAction(snapshot, seatId);
   const baseState = {
     roomCode: snapshot.roomCode, mode: snapshot.mode, phase: snapshot.phase, round: snapshot.roundIndex + 1,
     totalRounds: snapshot.totalRounds, revision: snapshot.revision, yourSeatId: seatId,
@@ -41,6 +48,7 @@ export function compactWebMcpState(snapshot: RoomSnapshot | null, seatId: string
     artist: snapshot.seats.find((candidate) => candidate.id === snapshot.artistSeatId)?.name ?? null,
     remainingMs: snapshot.endsAt ? Math.max(0, snapshot.endsAt - Date.now()) : null,
     canvasVersion: snapshot.canvasVersion, strokeCount: snapshot.canvas.length, scores: snapshot.scores,
+    nextAction: action.nextAction, urgency: action.urgency, deadline: snapshot.endsAt,
     seats: snapshot.seats.map(({ id, name, team, controller, isReady, isConnected }) => ({ id, name, team, controller, isReady, isConnected })),
   };
   if (seat?.controller !== "agent" || role !== "guesser") return baseState;
@@ -58,8 +66,69 @@ export function compactWebMcpState(snapshot: RoomSnapshot | null, seatId: string
     canvasGeometry,
     recentGuesses,
     guidance: canvasGeometry.length > 0
-      ? "Submit a broad object or action guess immediately. On the next state poll, use a higher canvasVersion and avoid repeating recentGuesses."
-      : "Poll get_match_state again as soon as the first geometry arrives, then guess immediately.",
+      ? "Visually inspect the rendered canvas now. Submit 1-3 ordered, distinct candidates immediately. Reconsider the whole drawing on every newer canvasVersion and do not repeat recentGuesses."
+      : "Keep get_match_state pending for the first geometry. Visually inspect the rendered canvas and submit candidates immediately when it arrives.",
+  };
+}
+
+function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
+  const seat = snapshot.seats.find((candidate) => candidate.id === seatId);
+  if (seat?.controller !== "agent") {
+    return {
+      nextAction: { tool: "get_match_state", instruction: "Wait for the next authoritative room update." },
+      urgency: "wait",
+    };
+  }
+  if (snapshot.phase === "lobby") {
+    if (snapshot.mode === "practice") {
+      return {
+        nextAction: { tool: "get_match_state", instruction: "The host starts Practice Pair automatically after both seats join." },
+        urgency: "wait",
+      };
+    }
+    if (seat.isHost) {
+      return {
+        nextAction: { tool: "start_match", instruction: "Start as soon as both teams have two ready players." },
+        urgency: "when-ready",
+      };
+    }
+  }
+  if (isArtist(snapshot, seatId)) {
+    return {
+      nextAction: {
+        tool: "draw_stroke",
+        instruction: "Do not narrate or plan the full drawing. Send ONE high-information stroke now, then immediately send the next stroke after its acknowledgement.",
+      },
+      urgency: "immediate",
+    };
+  }
+  if (canGuess(snapshot, seatId)) {
+    return {
+      nextAction: {
+        tool: "submit_guesses",
+        instruction: "Visually inspect the rendered canvas and immediately submit 1-3 ordered, distinct candidates; reconsider after every canvasVersion change.",
+      },
+      urgency: "immediate",
+    };
+  }
+  if (snapshot.phase === "round-end" && !seat.isReady) {
+    return {
+      nextAction: { tool: "ready_next", instruction: "Ready this seat for the next round." },
+      urgency: "immediate",
+    };
+  }
+  if (snapshot.phase === "match-end" && snapshot.roundResult !== null) {
+    return {
+      nextAction: { tool: "get_round_result", instruction: "Read the final round result." },
+      urgency: "when-ready",
+    };
+  }
+  return {
+    nextAction: {
+      tool: "get_match_state",
+      instruction: "Call with afterRevision equal to this revision and waitMs 25000 so the next role change wakes immediately.",
+    },
+    urgency: "wait",
   };
 }
 
