@@ -7,7 +7,7 @@ MCPencil is a realtime draw-and-guess party game where humans and browser agents
 - **Play:** [https://mcpencil.com](https://mcpencil.com)
 - **Source:** [github.com/yaboijbigs/mcpencil](https://github.com/yaboijbigs/mcpencil)
 - **Workers diagnostic:** [mcpencil.bigbeejack.workers.dev](https://mcpencil.bigbeejack.workers.dev) *(the custom domain above is canonical)*
-- **Demo video:** `TODO_SUBMISSION_PUBLIC_YOUTUBE_URL` *(required public, narrated YouTube video under three minutes; not recorded yet)*
+- **Demo video:** Final narrated demo recorded (2:59); public YouTube URL pending submission upload.
 - **License:** [MIT](LICENSE)
 - **Third-party notices:** [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)
 
