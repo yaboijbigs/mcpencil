@@ -320,16 +320,31 @@ describe("registered WebMCP tool contracts", () => {
       /rendered canvas as the primary picture.*immediately submit/i,
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
-      "first meaningful drawing",
+      "visually supported candidates from that snapshot",
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
-      "canvasVersion differs from your last observed picture and materially changes the scene",
+      "New strokes or a newer canvasVersion do not invalidate the observed snapshot",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "finish the current guess attempt without rechecking or waiting for the canvas to stop changing",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "Incorporate new strokes in the next observation cycle",
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
       "do not take a screenshot after every stroke",
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
       "canvasPerception text raster before bounded canvasGeometry",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "if no plausible new candidate is supported, wait briefly again",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "Discard the old picture when the round or artist changes",
+    );
+    expect(modelContext.tool("submit_guesses").description).toContain(
+      "stop guessing when the phase or role no longer permits it",
     );
     expect(latestHookResult?.registeredTools).toHaveLength(10);
     expect(latestHookResult?.registeredTools.find(({ name }) => name === "get_match_state")).toMatchObject({
@@ -638,7 +653,7 @@ describe("registered WebMCP tool contracts", () => {
       canvasPerception: { format: "ascii-raster-v1", width: 32, height: 22 },
     });
     expect((secondState.nextAction as Record<string, unknown>).instruction).toMatch(
-      /current picture and guidance.*submit 1-3 ordered, distinct candidates immediately/i,
+      /observed snapshot and guidance.*submit 1-3 ordered, distinct candidates immediately/i,
     );
 
     const guessResult = await modelContext.tool("submit_guesses").execute({
@@ -1138,6 +1153,11 @@ describe("registered WebMCP tool contracts", () => {
     expect(guidance).toMatch(/distinct|different/i);
     expect(guidance).toMatch(/close/i);
     expect(guidance).toMatch(/existing|same|reuse/i);
+    expect(guidance).toContain("begin the next observation/guess cycle");
+    expect(guidance).toContain("Refresh the picture to incorporate new strokes");
+    expect(guidance).toContain("finish the guess attempt even if canvasVersion advances");
+    expect(guidance).toContain("do not keep rechecking or wait for the canvas to stop changing");
+    expect(guidance).toContain("Discard the picture on round or artist changes and follow the current phase and role");
     expect(vi.getTimerCount()).toBe(0);
     expect(props.privatePrompt).not.toHaveBeenCalled();
     await act(async () => renderer.unmount());
@@ -1165,6 +1185,93 @@ describe("registered WebMCP tool contracts", () => {
     expect(command).toHaveBeenCalledTimes(2);
     expect(vi.getTimerCount()).toBe(0);
     expect(props.privatePrompt).not.toHaveBeenCalled();
+    await act(async () => renderer.unmount());
+  });
+
+  it("finishes an in-flight guess sequence while the same artist keeps drawing", async () => {
+    let drawing = practiceSnapshot({
+      artistSeatId: human.id,
+      canvasVersion: 1,
+      canvas: [{
+        id: "outline",
+        batchId: "human-outline",
+        canvasVersion: 1,
+        roundIndex: 0,
+        seatId: human.id,
+        origin: "human-ui",
+        createdAt: Date.now(),
+        primitive: {
+          type: "rectangle", x: 300, y: 200, rectWidth: 250, rectHeight: 150, color: "ink", width: 7,
+        },
+      }],
+    });
+    const props = propsForSnapshot(drawing);
+    const command = vi.fn(async () => commandResult({
+      revision: drawing.revision + 1,
+      canvasVersion: drawing.canvasVersion,
+      correct: false,
+      close: false,
+    }));
+    const renderer = await mountHook({ ...props, command });
+    useFakeWindowTimers();
+    await act(async () => {
+      await expect(modelContext.tool("get_match_state").execute({}, toolSignal()))
+        .resolves.toMatchObject({ canvasVersion: 1, yourRole: "guesser" });
+    });
+
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = Promise.resolve(modelContext.tool("submit_guesses").execute({
+        guesses: ["camera", "binoculars", "projector"],
+      }, toolSignal()));
+      await vi.advanceTimersByTimeAsync(100);
+    });
+    expect(command).toHaveBeenCalledTimes(1);
+
+    drawing = {
+      ...drawing,
+      revision: 3,
+      canvasVersion: 2,
+      canvas: [...drawing.canvas, {
+        ...drawing.canvas[0],
+        id: "first-detail",
+        batchId: "human-first-detail",
+        canvasVersion: 2,
+        primitive: { type: "ellipse", cx: 425, cy: 275, rx: 45, ry: 45, color: "ink", width: 7 },
+      }],
+    };
+    await updateHook(renderer, { ...props, snapshot: drawing, command });
+    await act(async () => { await vi.advanceTimersByTimeAsync(250); });
+    expect(command).toHaveBeenCalledTimes(2);
+
+    drawing = {
+      ...drawing,
+      revision: 5,
+      canvasVersion: 3,
+      canvas: [...drawing.canvas, {
+        ...drawing.canvas[0],
+        id: "second-detail",
+        batchId: "human-second-detail",
+        canvasVersion: 3,
+        primitive: { type: "line", x1: 480, y1: 230, x2: 520, y2: 230, color: "ink", width: 7 },
+      }],
+    };
+    await updateHook(renderer, { ...props, snapshot: drawing, command });
+    await act(async () => { await vi.advanceTimersByTimeAsync(350); });
+    await expect(pending).resolves.toMatchObject({
+      accepted: true,
+      correct: false,
+      canvasVersion: 3,
+      attempts: [
+        { guess: "camera", revision: 2, canvasVersion: 1 },
+        { guess: "binoculars", revision: 4, canvasVersion: 2 },
+        { guess: "projector", revision: 6, canvasVersion: 3 },
+      ],
+    });
+    expect(command).toHaveBeenCalledTimes(3);
+    expect(props.privatePrompt).not.toHaveBeenCalled();
+    expect(latestHookResult?.invocations.filter(({ tool }) => tool === "get_match_state")).toHaveLength(1);
+    expect(vi.getTimerCount()).toBe(0);
     await act(async () => renderer.unmount());
   });
 

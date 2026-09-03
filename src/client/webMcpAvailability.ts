@@ -185,7 +185,7 @@ export function compactWebMcpState(
     canvasGeometry,
     recentGuesses,
     guidance: canvasGeometry.length > 0
-      ? "Treat the rendered page/canvas visual as the primary picture. Inspect at the first meaningful drawing and again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. Reuse the prior visual only if canvasVersion matches the last observed picture, not merely the latest acknowledgement. After a short retry timeout, use the picture or close feedback for visually supported refinements without waiting for more strokes; if none are plausible, briefly wait again. canvasPerception is a fast 32x22 top-to-bottom text raster for clients without page vision; use canvasGeometry only as a final cross-check. Submit 1-3 ordered, distinct candidates immediately and never repeat recentGuesses."
+      ? "Treat the rendered page/canvas visual as the primary picture. Observe a snapshot and immediately submit 1-3 ordered, distinct, visually supported candidates while the human keeps drawing. New strokes or a newer canvasVersion do not invalidate the observed snapshot: finish the current guess attempt without rechecking or waiting for the canvas to stop changing. Incorporate new strokes in the next observation cycle; do not take a screenshot after every stroke. After a short retry timeout, use the picture or close feedback for visually supported refinements; if none are plausible, briefly wait again. Discard the old picture when the round or artist changes, and stop guessing when the phase or role no longer permits it. canvasPerception is a fast 32x22 top-to-bottom text raster for clients without page vision; use canvasGeometry only as a final cross-check. Never repeat recentGuesses."
       : "Wait for the first meaningful drawing. Then visually inspect the rendered page/canvas as the primary picture and submit candidates immediately. If page vision is unavailable, use canvasPerception before raw canvasGeometry; do not take a screenshot after every stroke.",
   };
 }
@@ -263,7 +263,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
     return {
       nextAction: {
         tool: "submit_guesses",
-        instruction: "Use the current picture and guidance to submit 1-3 ordered, distinct candidates immediately. After a short retry timeout, try visually supported or close-feedback refinements without waiting for another stroke; otherwise briefly wait again. Never repeat recentGuesses.",
+        instruction: "Use the observed snapshot and guidance to submit 1-3 ordered, distinct candidates immediately, even if new strokes arrive. Do not restart the current guess attempt when canvasVersion advances; incorporate new strokes in the next observation cycle. Never repeat recentGuesses; if no plausible candidate is supported, briefly wait again.",
       },
       urgency: "immediate",
     };

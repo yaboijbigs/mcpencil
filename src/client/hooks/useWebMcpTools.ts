@@ -566,7 +566,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 
   definitions.push(tool({
     name: "submit_guesses", title: "Submit up to three visible guesses",
-    description: "Inspect the rendered canvas as the primary picture, then immediately submit 1-3 concise, ordered, distinct, visually supported candidates. Inspect at the first meaningful drawing and again when the canvasVersion differs from your last observed picture and materially changes the scene; do not take a screenshot after every stroke. After a short retry wait, reuse an unchanged observed picture and close feedback to refine distinct guesses. If no plausible new candidate is supported, wait briefly again. If page vision is unavailable, use the 32x22 canvasPerception text raster before bounded canvasGeometry. Candidates are displayed 350ms apart; submission stops on the first correct answer.",
+    description: "Inspect the rendered canvas as the primary picture, then immediately submit 1-3 concise, ordered, distinct, visually supported candidates from that snapshot. New strokes or a newer canvasVersion do not invalidate the observed snapshot: finish the current guess attempt without rechecking or waiting for the canvas to stop changing. Incorporate new strokes in the next observation cycle; do not take a screenshot after every stroke. Use close feedback for grounded refinements; if no plausible new candidate is supported, wait briefly again. Discard the old picture when the round or artist changes, and stop guessing when the phase or role no longer permits it. If page vision is unavailable, use the 32x22 canvasPerception text raster before bounded canvasGeometry. Candidates are displayed 350ms apart; submission stops on the first correct answer.",
     inputSchema: {
       type: "object",
       properties: {
@@ -616,7 +616,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
           : {
               tool: "get_match_state",
               arguments: { afterRevision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0, waitMs: ACTIVE_GUESS_RETRY_WAIT_MS },
-              instruction: "Wait up to 2 seconds, then reconsider visually supported, distinct guesses even if the wait times out. Inspect if canvasVersion differs from your last observed picture; otherwise reuse that picture without another screenshot. If no plausible new candidate, wait briefly again.",
+              instruction: "Wait up to 2 seconds, then begin the next observation/guess cycle. Refresh the picture to incorporate new strokes, or reuse it for visually supported refinements if no new clues appeared. Once observed, finish the guess attempt even if canvasVersion advances; do not keep rechecking or wait for the canvas to stop changing. Discard the picture on round or artist changes and follow the current phase and role. If no plausible new candidate, wait briefly again.",
             },
         guidance: correct
           ? "Correct. The round is over, but the match is not complete; continue with nextAction."
