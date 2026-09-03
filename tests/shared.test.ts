@@ -6,7 +6,10 @@ import {
   DrawBatchCommandSchema,
   MAX_BATCH_PRIMITIVES,
   PrimitiveSchema,
+  ROUND_DURATION_MS,
+  ROUND_DURATION_OPTIONS_MS,
   RoomCodeSchema,
+  RoomCommandSchema,
   canGuess,
   isArtist,
   type RoomSnapshot,
@@ -228,6 +231,34 @@ describe("vector command contract", () => {
   });
 });
 
+describe("match duration settings", () => {
+  it("offers 90, 120, and 150 seconds while keeping the 90-second default", () => {
+    expect(ROUND_DURATION_OPTIONS_MS).toEqual([90_000, 120_000, 150_000]);
+    expect(ROUND_DURATION_MS).toBe(90_000);
+  });
+
+  it.each([90_000, 120_000, 150_000])("accepts a %i ms configuration", (roundDurationMs) => {
+    expect(RoomCommandSchema.safeParse({
+      type: "configure_match",
+      totalRounds: 4,
+      roundDurationMs,
+      origin: "webmcp",
+    }).success).toBe(true);
+  });
+
+  it.each([45_000, 60_000, 30_000, 119_999, 120_000.5])(
+    "rejects an unsupported %i ms configuration",
+    (roundDurationMs) => {
+      expect(RoomCommandSchema.safeParse({
+        type: "configure_match",
+        totalRounds: 4,
+        roundDurationMs,
+        origin: "webmcp",
+      }).success).toBe(false);
+    },
+  );
+});
+
 describe("role-safe shared helpers", () => {
   it("recognizes only the current artist during drawing", () => {
     expect(isArtist(snapshot(), "artist")).toBe(true);
@@ -399,7 +430,7 @@ describe("dynamic WebMCP availability", () => {
       mode: "practice",
       phase: "lobby",
       totalRounds: 4,
-      roundDurationMs: 60_000,
+      roundDurationMs: 120_000,
       artistSeatId: null,
       seats: [{
         id: "artist",
@@ -418,7 +449,7 @@ describe("dynamic WebMCP availability", () => {
     ]);
     expect(compactWebMcpState(agentPracticeHost, "artist")).toMatchObject({
       competitive: false,
-      matchSettings: { totalRounds: 4, roundDurationMs: 60_000 },
+      matchSettings: { totalRounds: 4, roundDurationMs: 120_000 },
     });
   });
 
@@ -808,6 +839,19 @@ describe("dynamic WebMCP availability", () => {
     ]);
   });
 
+  it.each(["round-prep", "drawing"] as const)("guides agent artists to draw an outline immediately during %s", (phase) => {
+    const state = compactWebMcpState(snapshot({ phase }), "artist");
+
+    expect(state.mustContinue).toBe(true);
+    expect(state.nextAction.tool).toBe("draw_stroke");
+    expect(state.nextAction.instruction).toContain("ONE high-information simple silhouette/outline stroke now");
+    expect(state.nextAction.instruction).toContain("X 0-1000 and Y 0-700");
+    expect(state.nextAction.instruction).toContain("every ellipse/rectangle/arc extent fully visible");
+    expect(state.nextAction.instruction).toContain("recognizable outline in the first few strokes; add details later");
+    expect(state.nextAction.instruction).toContain("After each successful acknowledgement, follow the returned nextAction immediately");
+    expect(state.nextAction.instruction).toContain("no screenshots, get_match_state, narration, or full-drawing planning between drawing strokes");
+  });
+
   it("gives only active agent guessers bounded current-round geometry and recent guesses", () => {
     const agentSnapshot = snapshot({
       seats: snapshot().seats.map((seat) => seat.id === "guesser"
@@ -867,15 +911,22 @@ describe("dynamic WebMCP availability", () => {
     expect(state.guidance).toContain("rendered page/canvas visual as the primary picture");
     expect(state.guidance).toContain("only when a newer canvasVersion materially changes the scene");
     expect(state.guidance).toContain("do not take a screenshot after every stroke");
+    expect(state.guidance).toContain("Reuse the prior visual only if canvasVersion matches the last observed picture");
+    expect(state.guidance).toContain("not merely the latest acknowledgement");
+    expect(state.guidance).toContain("After a short retry timeout");
+    expect(state.guidance).toContain("visually supported refinements without waiting for more strokes");
+    expect(state.guidance).toContain("if none are plausible, briefly wait again");
+    expect(state.guidance).toContain("never repeat recentGuesses");
     expect(state.guidance).toContain("canvasPerception is a fast 32x22");
     expect(state.guidance).toContain("canvasGeometry only as a final cross-check");
     expect(state.guidance).toContain("immediately");
     expect(state.nextAction.tool).toBe("submit_guesses");
-    expect(state.nextAction.instruction).toContain("Visually inspect the rendered page/canvas first");
-    expect(state.nextAction.instruction).toContain("only when a newer canvasVersion materially changes the scene");
-    expect(state.nextAction.instruction).toContain("canvasPerception as the fast picture");
-    expect(state.nextAction.instruction).toContain("canvasGeometry only as a final cross-check");
-    expect(state.nextAction.instruction).not.toContain("reconsider after every canvasVersion change");
+    expect(state.nextAction.instruction).toContain("Use the current picture and guidance");
+    expect(state.nextAction.instruction).toContain("1-3 ordered, distinct candidates immediately");
+    expect(state.nextAction.instruction).toContain("After a short retry timeout");
+    expect(state.nextAction.instruction).toContain("visually supported or close-feedback refinements without waiting for another stroke");
+    expect(state.nextAction.instruction).toContain("otherwise briefly wait again");
+    expect(state.nextAction.instruction).toContain("Never repeat recentGuesses");
     expect(state.urgency).toBe("immediate");
     expect(compactWebMcpState(agentSnapshot, "artist")).not.toHaveProperty("canvasGeometry");
     expect(compactWebMcpState(agentSnapshot, "artist")).not.toHaveProperty("canvasPerception");

@@ -141,6 +141,26 @@ function toolSignal() {
   return { signal: new AbortController().signal };
 }
 
+function propsForSnapshot(snapshot: RoomSnapshot): HookProps {
+  return {
+    snapshot,
+    seatId: agent.id,
+    command: vi.fn(async () => commandResult()),
+    privatePrompt: vi.fn(async () => ({ prompt: "camera", category: "objects", roundIndex: 0 })),
+    startPractice: vi.fn(async () => undefined),
+    joinMatch: vi.fn(async () => undefined),
+  };
+}
+
+function useFakeWindowTimers() {
+  // Mount first: tool registration intentionally waits for a real browser task.
+  vi.useFakeTimers();
+  Object.assign(window, {
+    setTimeout: globalThis.setTimeout.bind(globalThis),
+    clearTimeout: globalThis.clearTimeout.bind(globalThis),
+  });
+}
+
 function primitiveCases(schema: object) {
   const root = schema as {
     properties?: { primitive?: { oneOf?: Array<Record<string, unknown>> } };
@@ -190,6 +210,7 @@ describe("registered WebMCP tool contracts", () => {
   });
 
   afterEach(() => {
+    vi.useRealTimers();
     Object.defineProperty(globalThis, "document", {
       configurable: true,
       value: originalDocument,
@@ -199,6 +220,60 @@ describe("registered WebMCP tool contracts", () => {
       value: originalWindow,
     });
     Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
+  });
+
+  it("advertises and enforces the 90, 120, and 150-second lobby settings", async () => {
+    const command = vi.fn(async () => commandResult());
+    const props: HookProps = {
+      snapshot: practiceSnapshot({
+        phase: "lobby",
+        totalRounds: 4,
+        artistSeatId: null,
+        endsAt: null,
+        seats: [{ ...agent, isHost: true }],
+      }),
+      seatId: agent.id,
+      command,
+      privatePrompt: vi.fn(async () => ({ prompt: "camera", category: "objects", roundIndex: 0 })),
+      startPractice: vi.fn(async () => undefined),
+      joinMatch: vi.fn(async () => undefined),
+    };
+    const renderer = await mountHook(props);
+    const configure = modelContext.tool("configure_match");
+
+    expect(configure.inputSchema).toMatchObject({
+      properties: {
+        roundDurationMs: { type: "integer", enum: [90_000, 120_000, 150_000] },
+      },
+      required: ["totalRounds", "roundDurationMs"],
+    });
+    expect(configure.description).toContain("90, 120, or 150 seconds");
+
+    for (const roundDurationMs of [90_000, 120_000, 150_000]) {
+      await act(async () => {
+        await expect(configure.execute({ totalRounds: 4, roundDurationMs }, toolSignal()))
+          .resolves.toMatchObject({
+            accepted: true,
+            matchSettings: { totalRounds: 4, roundDurationMs },
+          });
+      });
+      expect(command).toHaveBeenLastCalledWith({
+        type: "configure_match",
+        totalRounds: 4,
+        roundDurationMs,
+        origin: "webmcp",
+      }, expect.any(AbortSignal));
+    }
+
+    for (const roundDurationMs of [45_000, 60_000]) {
+      await act(async () => {
+        await expect(configure.execute({ totalRounds: 4, roundDurationMs }, toolSignal()))
+          .rejects.toThrow("Round time must be 90, 120, or 150 seconds.");
+      });
+    }
+    expect(command).toHaveBeenCalledTimes(3);
+
+    await act(async () => renderer.unmount());
   });
 
   it("registers a stable page-lifetime descriptor set with exact annotations and primitive schemas", async () => {
@@ -241,14 +316,14 @@ describe("registered WebMCP tool contracts", () => {
     expect(modelContext.tool("get_match_state").description).toContain(
       "canvasPerception is a fast 32x22 text raster fallback",
     );
-    expect(modelContext.tool("submit_guesses").description).toContain(
-      "browser/page visual viewing or screenshot perception",
+    expect(modelContext.tool("submit_guesses").description).toMatch(
+      /rendered canvas as the primary picture.*immediately submit/i,
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
       "first meaningful drawing",
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
-      "only when a newer canvasVersion materially changes the scene",
+      "canvasVersion differs from your last observed picture and materially changes the scene",
     );
     expect(modelContext.tool("submit_guesses").description).toContain(
       "do not take a screenshot after every stroke",
@@ -556,11 +631,14 @@ describe("registered WebMCP tool contracts", () => {
     expect(secondState.guidance).toEqual(expect.stringContaining(
       "canvasPerception is a fast 32x22",
     ));
+    expect(secondState.guidance).toEqual(expect.stringContaining(
+      "use canvasGeometry only as a final cross-check",
+    ));
     expect(secondState).toMatchObject({
       canvasPerception: { format: "ascii-raster-v1", width: 32, height: 22 },
     });
-    expect((secondState.nextAction as Record<string, unknown>).instruction).toEqual(
-      expect.stringContaining("Visually inspect the rendered page/canvas first"),
+    expect((secondState.nextAction as Record<string, unknown>).instruction).toMatch(
+      /current picture and guidance.*submit 1-3 ordered, distinct candidates immediately/i,
     );
 
     const guessResult = await modelContext.tool("submit_guesses").execute({
@@ -869,6 +947,287 @@ describe("registered WebMCP tool contracts", () => {
     }, { signal: controller.signal });
     controller.abort();
     await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+    await act(async () => renderer.unmount());
+  });
+
+  it.each([25_000, 2_000, 750, 0])(
+    "bounds active agent-guesser waits while honoring a requested %i ms wait",
+    async (waitMs) => {
+      const drawing = practiceSnapshot({ artistSeatId: human.id });
+      const props = propsForSnapshot(drawing);
+      const renderer = await mountHook(props);
+      useFakeWindowTimers();
+      let settled = false;
+      let pending!: Promise<unknown>;
+      await act(async () => {
+        pending = Promise.resolve(modelContext.tool("get_match_state").execute({
+          afterRevision: drawing.revision,
+          waitMs,
+        }, toolSignal()));
+        void pending.then(() => { settled = true; });
+        await Promise.resolve();
+      });
+
+      const expectedWait = Math.min(waitMs, 2_000);
+      if (expectedWait > 0) {
+        expect(settled).toBe(false);
+        expect(vi.getTimerCount()).toBe(1);
+        await act(async () => { await vi.advanceTimersByTimeAsync(expectedWait - 1); });
+        expect(settled).toBe(false);
+        await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      }
+      await expect(pending).resolves.toMatchObject({
+        revision: drawing.revision,
+        yourRole: "guesser",
+        waitTimedOut: true,
+      });
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(props.privatePrompt).not.toHaveBeenCalled();
+      expect(await pending).not.toHaveProperty("privatePrompt");
+      await act(async () => renderer.unmount());
+    },
+  );
+
+  it.each(["drawing", "round-end"] as const)(
+    "wakes an active guesser immediately for a pushed newer %s revision",
+    async (phase) => {
+      const drawing = practiceSnapshot({ artistSeatId: human.id });
+      const props = propsForSnapshot(drawing);
+      const renderer = await mountHook(props);
+      useFakeWindowTimers();
+      let settled = false;
+      let pending!: Promise<unknown>;
+      await act(async () => {
+        pending = Promise.resolve(modelContext.tool("get_match_state").execute({
+          afterRevision: drawing.revision,
+          waitMs: 25_000,
+        }, toolSignal()));
+        void pending.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(100);
+      });
+      expect(settled).toBe(false);
+
+      await updateHook(renderer, {
+        ...props,
+        snapshot: { ...drawing, phase, revision: drawing.revision + 1 },
+      });
+      await expect(pending).resolves.toMatchObject({
+        phase,
+        revision: drawing.revision + 1,
+      });
+      expect(await pending).not.toHaveProperty("waitTimedOut");
+      expect(settled).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+      expect(props.privatePrompt).not.toHaveBeenCalled();
+      await act(async () => renderer.unmount());
+    },
+  );
+
+  it.each([
+    { label: "lobby", overrides: { phase: "lobby", artistSeatId: null, endsAt: null } },
+    { label: "ready round-end", overrides: { phase: "round-end", artistSeatId: human.id } },
+    {
+      label: "opposing-team spectator",
+      overrides: {
+        mode: "arena",
+        artistSeatId: human.id,
+        seats: [human, { ...agent, team: "coral" }],
+      },
+    },
+  ] satisfies Array<{ label: string; overrides: Partial<RoomSnapshot> }>)(
+    "preserves the full between-turn wait for a $label",
+    async ({ overrides }) => {
+      const snapshot = practiceSnapshot(overrides);
+      const props = propsForSnapshot(snapshot);
+      const renderer = await mountHook(props);
+      useFakeWindowTimers();
+      let settled = false;
+      let pending!: Promise<unknown>;
+      await act(async () => {
+        pending = Promise.resolve(modelContext.tool("get_match_state").execute({
+          afterRevision: snapshot.revision,
+          waitMs: 25_000,
+        }, toolSignal()));
+        void pending.then(() => { settled = true; });
+        await vi.advanceTimersByTimeAsync(2_000);
+      });
+      expect(settled).toBe(false);
+      expect(vi.getTimerCount()).toBe(1);
+      await act(async () => { await vi.advanceTimersByTimeAsync(22_999); });
+      expect(settled).toBe(false);
+      await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+      await expect(pending).resolves.toMatchObject({ revision: snapshot.revision, waitTimedOut: true });
+      expect(vi.getTimerCount()).toBe(0);
+      expect(props.privatePrompt).not.toHaveBeenCalled();
+      await act(async () => renderer.unmount());
+    },
+  );
+
+  it.each(["cancel", "unmount"] as const)(
+    "rejects an active guesser wait on %s and releases its timer",
+    async (action) => {
+      const drawing = practiceSnapshot({ artistSeatId: human.id });
+      const renderer = await mountHook(propsForSnapshot(drawing));
+      useFakeWindowTimers();
+      const controller = new AbortController();
+      let pending!: Promise<unknown>;
+      await act(async () => {
+        pending = Promise.resolve(modelContext.tool("get_match_state").execute({
+          afterRevision: drawing.revision,
+          waitMs: 25_000,
+        }, { signal: controller.signal }));
+      });
+      expect(vi.getTimerCount()).toBe(1);
+      const rejection = expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      await act(async () => {
+        if (action === "cancel") controller.abort();
+        else renderer.unmount();
+        await Promise.resolve();
+      });
+      await rejection;
+      expect(vi.getTimerCount()).toBe(0);
+      if (action === "cancel") await act(async () => renderer.unmount());
+    },
+  );
+
+  it("keeps guesses 350 ms apart and requests a short refinement wait after misses", async () => {
+    const props = propsForSnapshot(practiceSnapshot({ artistSeatId: human.id }));
+    const command = vi.fn(async () => commandResult({
+      revision: 7,
+      canvasVersion: 3,
+      correct: false,
+      close: true,
+    }));
+    const renderer = await mountHook({ ...props, command });
+    useFakeWindowTimers();
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = Promise.resolve(modelContext.tool("submit_guesses").execute({
+        guesses: ["camera", "binoculars", "projector"],
+      }, toolSignal()));
+      await Promise.resolve();
+    });
+    expect(command).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(349); });
+    expect(command).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(command).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(349); });
+    expect(command).toHaveBeenCalledTimes(2);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+
+    const result = await pending as Record<string, unknown>;
+    expect(command).toHaveBeenCalledTimes(3);
+    expect(result).toMatchObject({
+      accepted: true,
+      correct: false,
+      revision: 7,
+      canvasVersion: 3,
+      attempts: [
+        { guess: "camera", correct: false, close: true },
+        { guess: "binoculars", correct: false, close: true },
+        { guess: "projector", correct: false, close: true },
+      ],
+      nextAction: {
+        tool: "get_match_state",
+        arguments: { afterRevision: 7, waitMs: 2_000 },
+      },
+    });
+    const guidance = `${result.guidance} ${(result.nextAction as Record<string, unknown>).instruction}`;
+    expect(guidance).toMatch(/distinct|different/i);
+    expect(guidance).toMatch(/close/i);
+    expect(guidance).toMatch(/existing|same|reuse/i);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(props.privatePrompt).not.toHaveBeenCalled();
+    await act(async () => renderer.unmount());
+  });
+
+  it("stops a spaced guess sequence immediately after the first correct candidate", async () => {
+    const command = vi.fn(async (roomCommand: RoomCommand) => commandResult({
+      correct: roomCommand.type === "submit_guess" && roomCommand.guess === "camera",
+    }));
+    const props = propsForSnapshot(practiceSnapshot({ artistSeatId: human.id }));
+    const renderer = await mountHook({ ...props, command });
+    useFakeWindowTimers();
+    let pending!: Promise<unknown>;
+    await act(async () => {
+      pending = Promise.resolve(modelContext.tool("submit_guesses").execute({
+        guesses: ["binoculars", "camera", "projector"],
+      }, toolSignal()));
+      await vi.advanceTimersByTimeAsync(350);
+    });
+    await expect(pending).resolves.toMatchObject({
+      correct: true,
+      attempts: [{ guess: "binoculars", correct: false }, { guess: "camera", correct: true }],
+      nextAction: { tool: "get_match_state", arguments: {} },
+    });
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+    expect(props.privatePrompt).not.toHaveBeenCalled();
+    await act(async () => renderer.unmount());
+  });
+
+  it("serializes drawing behind server acknowledgement and reuses its canvas version", async () => {
+    const acknowledgements: Array<(result: CommandResult) => void> = [];
+    const command = vi.fn((_roomCommand: RoomCommand) => new Promise<CommandResult>((resolve) => {
+      acknowledgements.push(resolve);
+    }));
+    const renderer = await mountHook({ ...propsForSnapshot(practiceSnapshot()), command });
+    const primitive = { type: "line", x1: 100, y1: 100, x2: 200, y2: 200, color: "ink", width: 7 };
+    let first!: Promise<unknown>;
+    let second!: Promise<unknown>;
+    await act(async () => {
+      first = Promise.resolve(modelContext.tool("draw_stroke").execute({ primitive }, toolSignal()));
+      second = Promise.resolve(modelContext.tool("draw_stroke").execute({
+        primitive: { ...primitive, y2: 250 },
+      }, toolSignal()));
+      await Promise.resolve();
+    });
+    expect(command).toHaveBeenCalledTimes(1);
+    expect(command.mock.calls[0][0]).toMatchObject({
+      type: "draw_batch",
+      expectedVersion: 0,
+      primitives: [primitive],
+      origin: "webmcp",
+    });
+
+    let firstResult: Record<string, unknown> = {};
+    await act(async () => {
+      acknowledgements[0](commandResult({ revision: 2, canvasVersion: 1, batchId: "stroke-1" }));
+      firstResult = await first as Record<string, unknown>;
+      await Promise.resolve();
+    });
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(command.mock.calls[1][0]).toMatchObject({
+      type: "draw_batch",
+      expectedVersion: 1,
+      primitives: [{ ...primitive, y2: 250 }],
+      origin: "webmcp",
+    });
+    expect(firstResult).toMatchObject({
+      accepted: true,
+      revision: 2,
+      canvasVersion: 1,
+      batchId: "stroke-1",
+      mustContinue: true,
+      nextAction: {
+        tool: "draw_stroke",
+        instruction: expect.stringContaining("expectedCanvasVersion 1"),
+      },
+      guidance: expect.stringMatching(/accepted.*broadcast/i),
+    });
+    expect(firstResult.guidance).not.toEqual(expect.stringContaining("expectedCanvasVersion"));
+    expect(Object.keys(firstResult).sort()).toEqual([
+      "accepted", "batchId", "canvasVersion", "guidance", "mustContinue", "nextAction", "remainingMs", "revision",
+    ]);
+    await act(async () => {
+      acknowledgements[1](commandResult({ revision: 3, canvasVersion: 2, batchId: "stroke-2" }));
+      await expect(second).resolves.toMatchObject({
+        canvasVersion: 2,
+        nextAction: { tool: "draw_stroke", instruction: expect.stringContaining("expectedCanvasVersion 2") },
+      });
+    });
     await act(async () => renderer.unmount());
   });
 });

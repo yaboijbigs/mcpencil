@@ -122,6 +122,8 @@ const MatchStateInput = z.object({
   waitMs: z.number().int().min(0).max(25_000).optional(),
 }).strict();
 
+const ACTIVE_GUESS_RETRY_WAIT_MS = 2_000;
+
 const ConfigureMatchInput = z.object({
   totalRounds: z.number().int(),
   roundDurationMs: z.number().int(),
@@ -315,12 +317,12 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     tool({
       name: "get_match_state",
       title: "Inspect MCPencil match",
-      description: "Canonical page-exposed WebMCP continuation state. Before joining, it identifies play_mcpencil as the entry action. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between turns, pass afterRevision and waitMs 25000. Guessers should visually inspect the rendered page/canvas as the primary picture; canvasPerception is a fast 32x22 text raster fallback and compact canvasGeometry is only a final cross-check.",
+      description: "Canonical page-exposed WebMCP continuation state. Before joining, it identifies play_mcpencil as the entry action. After joining, read role, mustContinue, completionCondition, exact nextAction, urgency, deadline, and the privatePrompt when you are the agent artist. Between turns, pass afterRevision and waitMs 25000. Active guesser waits are capped at 2000ms and newer revisions wake them immediately. Guessers should visually inspect the rendered page/canvas as the primary picture; canvasPerception is a fast 32x22 text raster fallback and compact canvasGeometry is only a final cross-check.",
       inputSchema: {
         type: "object",
         properties: {
           afterRevision: { type: "integer", minimum: 0, description: "Optional last revision; wait for something newer." },
-          waitMs: { type: "integer", minimum: 0, maximum: 25000, description: "Optional wait for a newer revision. Use 25000 between turns." },
+          waitMs: { type: "integer", minimum: 0, maximum: 25000, description: "Optional maximum wait for a newer revision. Use 2000 while guessing and 25000 between turns; active guesser waits are capped at 2000." },
         },
         additionalProperties: false,
       },
@@ -328,9 +330,15 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
       execute: (input, options) =>
         run("get_match_state", input, options?.signal, async (signal) => {
           const parsed = MatchStateInput.parse(input);
+          // A guess acknowledgement can include strokes not yet observed by the
+          // agent. Do not park an active guesser on that revision for 25 seconds.
+          const requestedWaitMs = parsed.waitMs ?? 0;
+          const waitMs = availableToolsRef.current.has("submit_guesses")
+            ? Math.min(requestedWaitMs, ACTIVE_GUESS_RETRY_WAIT_MS)
+            : requestedWaitMs;
           const currentSnapshot = parsed.afterRevision === undefined
             ? snapshotRef.current
-            : await waitForRevision(parsed.afterRevision, parsed.waitMs ?? 0, signal);
+            : await waitForRevision(parsed.afterRevision, waitMs, signal);
           const currentSeatId = seatIdRef.current;
           const state = {
             ...compactWebMcpState(currentSnapshot, currentSeatId, roomInviteCode),
@@ -344,10 +352,6 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
             ...state,
             privatePrompt: prompt.prompt,
             promptCategory: prompt.category,
-            nextAction: {
-              tool: "draw_stroke",
-              instruction: "Send ONE high-information stroke now: X 0-1000, Y 0-700, with every ellipse/rectangle/arc extent fully visible. Do not narrate or plan the whole drawing; after acknowledgement, immediately send the next stroke.",
-            },
             urgency: "immediate",
             deadline: currentSnapshot.endsAt,
           };
@@ -440,7 +444,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   definitions.push(tool({
     name: "configure_match",
     title: "Configure MCPencil match",
-    description: "Set lobby match options only when the user asks. Sketch Duet supports 2, 4, or 6 rounds; Team Match supports 4, 6, or 8. Free-for-All automatically uses one round per player, so send the current totalRounds unchanged and configure only drawing time. Drawing time supports 45, 60, or 90 seconds. Only the agent host can call this before play begins.",
+    description: "Set lobby match options only when the user asks. Sketch Duet supports 2, 4, or 6 rounds; Team Match supports 4, 6, or 8. Free-for-All automatically uses one round per player, so send the current totalRounds unchanged and configure only drawing time. Drawing time supports 90, 120, or 150 seconds. Only the agent host can call this before play begins.",
     inputSchema: {
       type: "object",
       properties: {
@@ -463,7 +467,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
         throw new Error(`${activeSnapshot.mode === "practice" ? "Sketch Duet" : "Team Match"} allows ${roundOptions.join(", ")} rounds.`);
       }
       if (!(ROUND_DURATION_OPTIONS_MS as readonly number[]).includes(parsed.roundDurationMs)) {
-        throw new Error("Round time must be 45, 60, or 90 seconds.");
+        throw new Error("Round time must be 90, 120, or 150 seconds.");
       }
       const totalRounds = activeSnapshot.mode === "free-for-all"
         ? activeSnapshot.totalRounds
@@ -500,7 +504,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
     definitions.push(
       tool({
         name: "draw_stroke", title: "Draw one stroke now",
-        description: "Draw exactly ONE primitive on the 1000x700 canvas. X coordinates must be 0-1000 and Y coordinates 0-700; keep the full ellipse, rectangle, or arc extent inside the visible canvas. Do not narrate, inspect the blank canvas, prepare multiple commands, or plan the full picture. Immediately send one high-information silhouette stroke. When it is acknowledged as persisted and broadcast, immediately call draw_stroke again with the next stroke and the returned canvasVersion. Receiving clients render each broadcast asynchronously.",
+        description: "Draw exactly ONE primitive on the 1000x700 canvas; keep all shape extents visible. Start with a simple, recognizable outline in the first few strokes; details later. Send the first stroke now without inspecting the blank canvas or planning the full picture. After each persisted/broadcast acknowledgement, immediately send the next stroke using the returned canvasVersion. No get_match_state, screenshots, narration, or preparing multiple commands between accepted strokes. Rendering is asynchronous.",
         inputSchema: {
           type: "object",
           properties: {
@@ -527,9 +531,9 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
               mustContinue: true,
               nextAction: {
                 tool: "draw_stroke",
-                instruction: `Construct and send exactly one next primitive immediately with expectedCanvasVersion ${result.canvasVersion}; use X 0-1000 and Y 0-700 and keep shape extents visible. Do not narrate or pause to plan.`,
+                instruction: `Send ONE next stroke now with expectedCanvasVersion ${result.canvasVersion}. Outline before details; no get_match_state, screenshots, or narration between accepted strokes.`,
               },
-              guidance: `Stroke accepted and broadcast. Immediately call draw_stroke again with ONE next stroke and expectedCanvasVersion ${result.canvasVersion}; do not narrate or pause to plan.`,
+              guidance: "Stroke accepted and broadcast.",
             };
           };
           const queued = drawStrokeChainRef.current.then(draw, draw);
@@ -562,7 +566,7 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
 
   definitions.push(tool({
     name: "submit_guesses", title: "Submit up to three visible guesses",
-    description: "Use browser/page visual viewing or screenshot perception to inspect the rendered canvas as the primary picture, then immediately submit 1-3 concise, ordered, distinct candidates. Inspect at the first meaningful drawing and again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. If page vision is unavailable, use the 32x22 canvasPerception text raster before bounded canvasGeometry. Every candidate is sent to the room and displayed to players, 350ms apart; submission stops on the first correct answer.",
+    description: "Inspect the rendered canvas as the primary picture, then immediately submit 1-3 concise, ordered, distinct, visually supported candidates. Inspect at the first meaningful drawing and again when the canvasVersion differs from your last observed picture and materially changes the scene; do not take a screenshot after every stroke. After a short retry wait, reuse an unchanged observed picture and close feedback to refine distinct guesses. If no plausible new candidate is supported, wait briefly again. If page vision is unavailable, use the 32x22 canvasPerception text raster before bounded canvasGeometry. Candidates are displayed 350ms apart; submission stops on the first correct answer.",
     inputSchema: {
       type: "object",
       properties: {
@@ -611,12 +615,12 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
           ? { tool: "get_match_state", arguments: {}, instruction: "The round ended; read the authoritative result and continue to the next round." }
           : {
               tool: "get_match_state",
-              arguments: { afterRevision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0, waitMs: 25_000 },
-              instruction: "Wait for a newer canvasVersion that materially changes the scene, visually inspect the whole rendered canvas again, and continue guessing. If page vision is unavailable, use canvasPerception before raw canvasGeometry.",
+              arguments: { afterRevision: lastResult?.revision ?? snapshotRef.current?.revision ?? 0, waitMs: ACTIVE_GUESS_RETRY_WAIT_MS },
+              instruction: "Wait up to 2 seconds, then reconsider visually supported, distinct guesses even if the wait times out. Inspect if canvasVersion differs from your last observed picture; otherwise reuse that picture without another screenshot. If no plausible new candidate, wait briefly again.",
             },
         guidance: correct
           ? "Correct. The round is over, but the match is not complete; continue with nextAction."
-          : `All ${attempts.length} guesses were displayed. Wait until a newer canvasVersion materially changes the scene, visually inspect the full rendered canvas again, then submit new candidates. Do not take a screenshot after every stroke; if page vision is unavailable, use canvasPerception before raw canvasGeometry.`,
+          : `All ${attempts.length} guesses were displayed. Use close feedback to refine distinct candidates; do not repeat previous guesses.`,
       };
     }, (output) => `${output.correct ? "Correct" : `${output.attempts.length} guesses displayed`}; canvas v${output.canvasVersion}`),
   }));

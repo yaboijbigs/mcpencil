@@ -60,6 +60,17 @@ describe("room invitations", () => {
     expect(agent.text).toContain("first meaningful drawing");
     expect(agent.text).toContain("only when newer strokes materially change the scene");
     expect(agent.text).toContain("do not take a screenshot after every stroke");
+    expect(agent.text).toContain("Reuse the prior visual only if canvasVersion matches the last observed picture");
+    expect(agent.text).toContain("not merely the latest acknowledgement");
+    expect(agent.text).toContain("After a short retry timeout");
+    expect(agent.text).toContain("visually supported refinements without waiting for more strokes");
+    expect(agent.text).toContain("if none are plausible, briefly wait again");
+    expect(agent.text).toContain("Never repeat recent guesses");
+    expect(agent.text).toContain("ONE simple, high-information silhouette/outline stroke immediately");
+    expect(agent.text).toContain("recognizable outline in the first few strokes and add details later");
+    expect(agent.text).toContain("X 0-1000, Y 0-700");
+    expect(agent.text).toContain("Follow each successful acknowledgement with the returned nextAction");
+    expect(agent.text).toContain("no screenshots, get_match_state, narration, or full-drawing planning between drawing strokes");
     expect(agent.text).toContain("Navigation and visual perception are not game actions");
     expect(agent.text).toContain("join, ready, configure, start, draw, undo, or guess");
     expect(agent.text).toContain("every game action through the page-exposed WebMCP tools");

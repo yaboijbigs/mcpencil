@@ -185,7 +185,7 @@ export function compactWebMcpState(
     canvasGeometry,
     recentGuesses,
     guidance: canvasGeometry.length > 0
-      ? "Treat the rendered page/canvas visual as the primary picture. Visually inspect it at the first meaningful drawing and again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. canvasPerception is a fast 32x22 top-to-bottom text raster for clients without page vision; use canvasGeometry only as a final cross-check. Submit 1-3 ordered, distinct candidates immediately and do not repeat recentGuesses."
+      ? "Treat the rendered page/canvas visual as the primary picture. Inspect at the first meaningful drawing and again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. Reuse the prior visual only if canvasVersion matches the last observed picture, not merely the latest acknowledgement. After a short retry timeout, use the picture or close feedback for visually supported refinements without waiting for more strokes; if none are plausible, briefly wait again. canvasPerception is a fast 32x22 top-to-bottom text raster for clients without page vision; use canvasGeometry only as a final cross-check. Submit 1-3 ordered, distinct candidates immediately and never repeat recentGuesses."
       : "Wait for the first meaningful drawing. Then visually inspect the rendered page/canvas as the primary picture and submit candidates immediately. If page vision is unavailable, use canvasPerception before raw canvasGeometry; do not take a screenshot after every stroke.",
   };
 }
@@ -254,7 +254,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
     return {
       nextAction: {
         tool: "draw_stroke",
-        instruction: "Send ONE high-information stroke now using X 0-1000 and Y 0-700, with every ellipse/rectangle/arc extent fully visible. Do not narrate or plan the full drawing; immediately send the next stroke after acknowledgement.",
+        instruction: "Send ONE high-information simple silhouette/outline stroke now using X 0-1000 and Y 0-700, with every ellipse/rectangle/arc extent fully visible. Establish a recognizable outline in the first few strokes; add details later. After each successful acknowledgement, follow the returned nextAction immediately: no screenshots, get_match_state, narration, or full-drawing planning between drawing strokes.",
       },
       urgency: "immediate",
     };
@@ -263,7 +263,7 @@ function compactNextAction(snapshot: RoomSnapshot, seatId: string | null) {
     return {
       nextAction: {
         tool: "submit_guesses",
-        instruction: "Visually inspect the rendered page/canvas first at the first meaningful drawing, then immediately submit 1-3 ordered, distinct candidates. Inspect again only when a newer canvasVersion materially changes the scene; do not take a screenshot after every stroke. If page vision is unavailable, read canvasPerception as the fast picture and use canvasGeometry only as a final cross-check.",
+        instruction: "Use the current picture and guidance to submit 1-3 ordered, distinct candidates immediately. After a short retry timeout, try visually supported or close-feedback refinements without waiting for another stroke; otherwise briefly wait again. Never repeat recentGuesses.",
       },
       urgency: "immediate",
     };

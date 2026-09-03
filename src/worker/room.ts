@@ -845,7 +845,7 @@ export class GameRoom extends DurableObject<Env> {
       throw new ApiError(
         400,
         "INVALID_MATCH_SETTINGS",
-        "Round duration must be 45, 60, or 90 seconds.",
+        "Round duration must be 90, 120, or 150 seconds.",
       );
     }
 

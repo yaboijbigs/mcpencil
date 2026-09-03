@@ -13,7 +13,7 @@ export const FREE_FOR_ALL_MAX_PLAYERS = 8;
 
 export const PRACTICE_ROUND_OPTIONS = [2, 4, 6] as const;
 export const ARENA_ROUND_OPTIONS = [4, 6, 8] as const;
-export const ROUND_DURATION_OPTIONS_MS = [45_000, 60_000, 90_000] as const;
+export const ROUND_DURATION_OPTIONS_MS = [90_000, 120_000, 150_000] as const;
 
 export const TEAM_IDS = ["cobalt", "coral"] as const;
 export const CONTROLLER_TYPES = ["human", "agent"] as const;
@@ -350,7 +350,7 @@ const ConfigureMatchCommandSchema = z.object({
   totalRounds: z.number().int(),
   roundDurationMs: z.number().int().refine(
     (value) => (ROUND_DURATION_OPTIONS_MS as readonly number[]).includes(value),
-    { message: "Round duration must be 45, 60, or 90 seconds." },
+    { message: "Round duration must be 90, 120, or 150 seconds." },
   ),
   origin: OriginSchema,
 }).strict();

@@ -66,15 +66,17 @@ Tools are registered imperatively with `document.modelContext.registerTool`. The
 | `get_round_result` | After any completed round | No | Returns the revealed answer, points, elapsed time, stroke count, tool-call count, and complete guess transcript. |
 | `ready_next` | Round end | Yes | Marks the caller ready and advances when the room is eligible. |
 
-Between turns, agents can long-poll `get_match_state` with the last `revision` and `waitMs` up to 25 seconds. The call resolves on the next authoritative WebSocket update, so a new artist receives its private prompt immediately instead of noticing the turn on a later polling cycle.
+Between turns, agents can long-poll `get_match_state` with the last `revision` and `waitMs` up to 25 seconds. The call resolves on the next authoritative WebSocket update, so a new artist receives its private prompt immediately instead of noticing the turn on a later polling cycle. Active agent guessers wait at most two seconds, allowing visually supported or close-feedback refinements even when the artist pauses. If no new candidate is plausible, the agent can briefly wait again.
 
 ### Visual-interpretation boundary
 
-The human drawing is rendered in a dedicated `agent.mcpencil.com` browser document, isolated from the human artist's private-prompt document. Browser/page vision is the primary guesser representation: the agent inspects once after a meaningful picture appears and again only after material new strokes, avoiding a slow screenshot on every mark. Every game action still uses the page's WebMCP tools.
+The human drawing is rendered in a dedicated `agent.mcpencil.com` browser document, isolated from the human artist's private-prompt document. Browser/page vision is the primary guesser representation: the agent inspects once after a meaningful picture appears and again only after material new strokes, avoiding a slow screenshot on every mark. A prior visual can be reused only when `canvasVersion` matches the last observed picture, not merely the latest acknowledgement; retries must use distinct candidates rather than repeat recent guesses. Every game action still uses the page's WebMCP tools.
 
 Because [portable multimodal image tool results are not yet specified across WebMCP clients](https://github.com/webmachinelearning/webmcp/issues/86), `get_match_state` also returns a deterministic `32 × 22` topmost-color text raster named `canvasPerception`. It cheaply approximates silhouette, proportion, overlap, color, and erasure in a bounded payload and is produced locally in milliseconds. A strongly bounded canonical `canvasGeometry` sample remains a final cross-check. Neither representation contains the prompt, aliases, category, or a semantic label. Submission materials must describe this hybrid truthfully rather than claim a pixel-only image-recognition benchmark.
 
 `draw_stroke` accepts exactly one `line`, `polyline`, `ellipse`, `rectangle`, `arc`, or `polygon` primitive on a normalized `1000 × 700` canvas. Coordinates, colors, stroke widths, fills, point counts, payload size, role, phase, version, rate, and idempotency are enforced. Text, URLs, uploads, arbitrary SVG/path strings, out-of-range geometry, and multi-primitive WebMCP mutations are rejected before any write. Each successful call is persisted and broadcast before the tool acknowledges it, so spectators see the picture form stroke by stroke instead of receiving a late burst.
+
+Artist guidance prioritizes one simple silhouette/outline stroke immediately, a recognizable outline in the first few strokes, and details later. Agents follow acknowledged drawing strokes directly with the next returned action, without extra screenshots, state reads, or narration between strokes; acknowledgement ordering and server validation are unchanged.
 
 ## Game modes
 
@@ -82,7 +84,7 @@ Because [portable multimodal image tool results are not yet specified across Web
 - **Team Match:** 4–8 human or agent players form two teams of 2–4. The host chooses 4, 6, or 8 rounds. Teams alternate turns, artists rotate, only the active artist's teammates may guess, and points accumulate on the team score.
 - **Free-for-All:** 3–8 human or agent players compete for individual placement. Starting the match freezes the roster and a stable shuffled artist order. Every starting player draws exactly once, so the roster size determines the number of rounds. All other players may guess simultaneously; the first correct guess ends the round. The artist and first solver each independently earn `100 + remaining whole seconds`, and ties in the final standings are valid.
 
-The host chooses 45, 60, or 90 seconds per round in every waiting room. Sketch Duet and Team Match additionally expose their allowed round counts; Free-for-All derives its round count from the frozen starting roster. Everyone sees synchronized settings, and only the host can change them.
+The host chooses 90, 120, or 150 seconds per round in every waiting room, with 90 seconds as the default. Sketch Duet and Team Match additionally expose their allowed round counts; Free-for-All derives its round count from the frozen starting roster. Everyone sees synchronized settings, and only the host can change them.
 
 Wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers. The server-side deck contains 174 concrete single-word nouns, including a 139-card Sketch Duet pool; prompts are dealt without replacement for the entire match.
 

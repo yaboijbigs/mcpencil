@@ -391,12 +391,12 @@ describe("Durable room authority", () => {
     expect((await command(agentHost, {
       type: "configure_match",
       totalRounds: 6,
-      roundDurationMs: 60_000,
+      roundDurationMs: 120_000,
       origin: "webmcp",
     })).status).toBe(200);
     expect(await state(agentHost)).toMatchObject({
       totalRounds: 6,
-      roundDurationMs: 60_000,
+      roundDurationMs: 120_000,
     });
 
     const practice = await createRoom("practice", "Practice Settings Host");
@@ -412,12 +412,12 @@ describe("Durable room authority", () => {
     expect((await command(freeForAll, {
       type: "configure_match",
       totalRounds: 1,
-      roundDurationMs: 60_000,
+      roundDurationMs: 120_000,
       origin: "human-ui",
     })).status).toBe(200);
     expect(await state(freeForAll)).toMatchObject({
       totalRounds: 1,
-      roundDurationMs: 60_000,
+      roundDurationMs: 120_000,
     });
 
     const host = await createRoom("arena", "Settings Host");
@@ -442,7 +442,7 @@ describe("Durable room authority", () => {
     const nonHost = await command(teammate, {
       type: "configure_match",
       totalRounds: 8,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
       origin: "human-ui",
     });
     expect(nonHost.status).toBe(403);
@@ -451,31 +451,33 @@ describe("Durable room authority", () => {
     const invalidRounds = await command(host, {
       type: "configure_match",
       totalRounds: 2,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
       origin: "human-ui",
     });
     expect(invalidRounds.status).toBe(400);
     expect(await body<ApiFailure>(invalidRounds)).toMatchObject({ code: "INVALID_MATCH_SETTINGS" });
 
-    const invalidDuration = await request(`/api/rooms/${host.roomCode}/commands`, {
-      method: "POST",
-      body: JSON.stringify({
-        token: host.token,
-        command: {
-          type: "configure_match",
-          totalRounds: 8,
-          roundDurationMs: 30_000,
-          origin: "human-ui",
-        },
-      }),
-    });
-    expect(invalidDuration.status).toBe(400);
-    expect(await body<ApiFailure>(invalidDuration)).toMatchObject({ code: "INVALID_COMMAND" });
+    for (const roundDurationMs of [30_000, 45_000, 60_000]) {
+      const invalidDuration = await request(`/api/rooms/${host.roomCode}/commands`, {
+        method: "POST",
+        body: JSON.stringify({
+          token: host.token,
+          command: {
+            type: "configure_match",
+            totalRounds: 8,
+            roundDurationMs,
+            origin: "human-ui",
+          },
+        }),
+      });
+      expect(invalidDuration.status).toBe(400);
+      expect(await body<ApiFailure>(invalidDuration)).toMatchObject({ code: "INVALID_COMMAND" });
+    }
 
     const wrongOrigin = await command(host, {
       type: "configure_match",
       totalRounds: 8,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
       origin: "webmcp",
     });
     expect(wrongOrigin.status).toBe(403);
@@ -485,7 +487,7 @@ describe("Durable room authority", () => {
     const configured = await command(host, {
       type: "configure_match",
       totalRounds: 8,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
       origin: "human-ui",
     });
     expect(configured.status).toBe(200);
@@ -497,7 +499,7 @@ describe("Durable room authority", () => {
     const snapshot = await state(host);
     expect(snapshot).toMatchObject({
       totalRounds: 8,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
     });
     expect(snapshot.seats.find((seat) => seat.id === host.seatId)?.isReady).toBe(false);
     expect(snapshot.seats.find((seat) => seat.id === teammate.seatId)?.isReady).toBe(false);
@@ -510,7 +512,7 @@ describe("Durable room authority", () => {
     await abortAllDurableObjects();
     expect(await state(host)).toMatchObject({
       totalRounds: 8,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
     });
   });
 
@@ -519,16 +521,16 @@ describe("Durable room authority", () => {
     const configure = await command(human, {
       type: "configure_match",
       totalRounds: 4,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
       origin: "human-ui",
     });
     expect(configure.status).toBe(200);
-    expect(await state(human)).toMatchObject({ totalRounds: 4, roundDurationMs: 45_000 });
+    expect(await state(human)).toMatchObject({ totalRounds: 4, roundDurationMs: 150_000 });
 
     const invalidPracticeRounds = await command(human, {
       type: "configure_match",
       totalRounds: 8,
-      roundDurationMs: 60_000,
+      roundDurationMs: 120_000,
       origin: "human-ui",
     });
     expect(invalidPracticeRounds.status).toBe(400);
@@ -556,7 +558,7 @@ describe("Durable room authority", () => {
     expect(started).toMatchObject({
       phase: "round-prep",
       totalRounds: 4,
-      roundDurationMs: 45_000,
+      roundDurationMs: 150_000,
     });
 
     const draw = await command(agent, {
@@ -577,7 +579,7 @@ describe("Durable room authority", () => {
           "SELECT started_at, ends_at FROM rounds WHERE round_index = 0",
         )
         .one();
-      expect(round.ends_at - round.started_at).toBe(45_000);
+      expect(round.ends_at - round.started_at).toBe(150_000);
     });
 
     const wrongPhase = await command(human, {
