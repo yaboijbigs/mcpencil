@@ -69,6 +69,8 @@ Sketch Duet uses the same phases and command schemas for exactly one human and o
 
 Team Match credits `100 + remaining whole seconds` to the active team when a teammate solves the drawing. In Free-for-All, all non-artists may guess simultaneously; the first accepted correct guess ends the round and independently credits that guesser and the artist `100 + remaining whole seconds` each. Individual standings determine the winner, and equal totals remain ties.
 
+Prompt difficulty is a host-only lobby setting in all three modes: `easy` selects single-word nouns and `hard` selects action phrases. Schema migration v3 adds `room.prompt_difficulty` with an `easy` default, preserving existing rooms and stored round answers. `configure_match.promptDifficulty` is optional for older clients; omission preserves the current setting. Shared snapshots and compact WebMCP state expose only the difficulty and its general meaning, never the active answer or pool. New rounds select without replacement from the chosen server-side pool; Hard aliases retain the action rather than accepting a bare object. Difficulty cannot change after the lobby.
+
 ## Command lifecycle
 
 Every mutation is a `CommandEnvelope` containing an opaque seat token and a discriminated command. The shared schema rejects unknown keys and invalid payloads at the edge of the trust boundary.

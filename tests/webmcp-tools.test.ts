@@ -76,6 +76,7 @@ function practiceSnapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
     roundIndex: 0,
     totalRounds: 2,
     roundDurationMs: 90_000,
+    promptDifficulty: "easy",
     activeTeam: "cobalt",
     artistSeatId: agent.id,
     endsAt: Date.now() + 90_000,
@@ -222,12 +223,13 @@ describe("registered WebMCP tool contracts", () => {
     Reflect.deleteProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT");
   });
 
-  it("advertises and enforces the 90, 120, and 150-second lobby settings", async () => {
+  it("advertises the round-time options and preserves difficulty when old clients omit it", async () => {
     const command = vi.fn(async () => commandResult());
     const props: HookProps = {
       snapshot: practiceSnapshot({
         phase: "lobby",
         totalRounds: 4,
+        promptDifficulty: "hard",
         artistSeatId: null,
         endsAt: null,
         seats: [{ ...agent, isHost: true }],
@@ -244,6 +246,7 @@ describe("registered WebMCP tool contracts", () => {
     expect(configure.inputSchema).toMatchObject({
       properties: {
         roundDurationMs: { type: "integer", enum: [90_000, 120_000, 150_000] },
+        promptDifficulty: { type: "string", enum: ["easy", "hard"] },
       },
       required: ["totalRounds", "roundDurationMs"],
     });
@@ -254,7 +257,7 @@ describe("registered WebMCP tool contracts", () => {
         await expect(configure.execute({ totalRounds: 4, roundDurationMs }, toolSignal()))
           .resolves.toMatchObject({
             accepted: true,
-            matchSettings: { totalRounds: 4, roundDurationMs },
+            matchSettings: { totalRounds: 4, roundDurationMs, promptDifficulty: "hard" },
           });
       });
       expect(command).toHaveBeenLastCalledWith({
@@ -273,6 +276,59 @@ describe("registered WebMCP tool contracts", () => {
     }
     expect(command).toHaveBeenCalledTimes(3);
 
+    await act(async () => renderer.unmount());
+  });
+
+  it("validates easy and hard prompt settings before sending them to the room", async () => {
+    const command = vi.fn(async () => commandResult());
+    const props = {
+      ...propsForSnapshot(practiceSnapshot({
+        phase: "lobby",
+        totalRounds: 4,
+        artistSeatId: null,
+        endsAt: null,
+        seats: [{ ...agent, isHost: true }],
+      })),
+      command,
+    };
+    const renderer = await mountHook(props);
+    const configure = modelContext.tool("configure_match");
+    expect(configure.description).toContain("Easy prompts are single words (bear, dog, hat, helicopter)");
+    expect(configure.description).toContain("Hard prompts are actions (flying a kite, driving a car)");
+    expect(configure.description).toContain("Omit promptDifficulty to preserve the current setting");
+
+    for (const promptDifficulty of ["easy", "hard"]) {
+      await act(async () => {
+        await expect(configure.execute({
+          totalRounds: 4,
+          roundDurationMs: 120_000,
+          promptDifficulty,
+        }, toolSignal())).resolves.toMatchObject({
+          accepted: true,
+          matchSettings: { totalRounds: 4, roundDurationMs: 120_000, promptDifficulty },
+        });
+      });
+      expect(command).toHaveBeenLastCalledWith({
+        type: "configure_match",
+        totalRounds: 4,
+        roundDurationMs: 120_000,
+        promptDifficulty,
+        origin: "webmcp",
+      }, expect.any(AbortSignal));
+    }
+    expect(command).toHaveBeenCalledTimes(2);
+
+    for (const promptDifficulty of ["medium", "HARD", "", null, 1]) {
+      await act(async () => {
+        await expect(configure.execute({
+          totalRounds: 4,
+          roundDurationMs: 120_000,
+          promptDifficulty,
+        }, toolSignal())).rejects.toThrow();
+      });
+    }
+    expect(command).toHaveBeenCalledTimes(2);
+    expect(props.privatePrompt).not.toHaveBeenCalled();
     await act(async () => renderer.unmount());
   });
 

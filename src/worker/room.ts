@@ -26,6 +26,7 @@ import {
   type MatchAnalytics,
   type MatchPhase,
   type PrivatePrompt,
+  type PromptDifficulty,
   type PlayerStanding,
   type RoomCommand,
   type RoomMode,
@@ -58,6 +59,7 @@ interface RoomRow extends SqlRecord {
   round_index: number;
   total_rounds: number;
   round_duration_ms: number;
+  prompt_difficulty: PromptDifficulty;
   active_team: TeamId;
   artist_seat_id: string | null;
   ends_at: number | null;
@@ -161,7 +163,7 @@ type DeadlineTransition =
   | "result-extended"
   | "round-advanced";
 
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 const HUMAN_DRAW_RATE_LIMIT_MS = 40;
 const AGENT_DRAW_RATE_LIMIT_MS = 250;
 const GUESS_RATE_LIMIT_MS = 350;
@@ -321,6 +323,18 @@ export class GameRoom extends DurableObject<Env> {
         );
         this.ctx.storage.sql.exec(
           "INSERT INTO schema_migrations(version, applied_at) VALUES (2, ?)",
+          Date.now(),
+        );
+      });
+    }
+
+    if (!appliedVersions.has(3)) {
+      this.ctx.storage.transactionSync(() => {
+        this.ctx.storage.sql.exec(
+          "ALTER TABLE room ADD COLUMN prompt_difficulty TEXT NOT NULL DEFAULT 'easy'",
+        );
+        this.ctx.storage.sql.exec(
+          "INSERT INTO schema_migrations(version, applied_at) VALUES (3, ?)",
           Date.now(),
         );
       });
@@ -848,15 +862,20 @@ export class GameRoom extends DurableObject<Env> {
         "Round duration must be 90, 120, or 150 seconds.",
       );
     }
+    const promptDifficulty = command.promptDifficulty ?? room.prompt_difficulty;
+    if (promptDifficulty !== "easy" && promptDifficulty !== "hard") {
+      throw new ApiError(400, "INVALID_MATCH_SETTINGS", "Prompt difficulty must be easy or hard.");
+    }
 
     this.ctx.storage.transactionSync(() => {
       const totalRounds = mode === "free-for-all" ? this.seatRows().length : command.totalRounds;
       this.ctx.storage.sql.exec(
         `UPDATE room SET
-           total_rounds = ?, round_duration_ms = ?, revision = revision + 1
+           total_rounds = ?, round_duration_ms = ?, prompt_difficulty = ?, revision = revision + 1
          WHERE id = 1`,
         totalRounds,
         command.roundDurationMs,
+        promptDifficulty,
       );
       if (mode !== "practice") {
         this.ctx.storage.sql.exec(
@@ -868,8 +887,8 @@ export class GameRoom extends DurableObject<Env> {
         kind: command.origin === "webmcp" ? "tool-call" : "human-action",
         label: "match_configured",
         detail: mode === "free-for-all"
-          ? `${totalRounds} player turns at ${command.roundDurationMs / 1_000} seconds each.`
-          : `${totalRounds} rounds at ${command.roundDurationMs / 1_000} seconds each.`,
+          ? `${totalRounds} player turns at ${command.roundDurationMs / 1_000} seconds each with ${promptDifficulty} prompts.`
+          : `${totalRounds} rounds at ${command.roundDurationMs / 1_000} seconds each with ${promptDifficulty} prompts.`,
         seatId: seat.id,
         origin: command.origin,
         canvasVersion: room.canvas_version,
@@ -1250,7 +1269,7 @@ export class GameRoom extends DurableObject<Env> {
     const usedPrompts = this.rows<SqlRecord & { prompt: string }>(
       "SELECT prompt FROM rounds ORDER BY round_index",
     ).map((round) => round.prompt);
-    const card = randomPrompt(usedPrompts, mode === "practice");
+    const card = randomPrompt(usedPrompts, mode === "practice", previous.prompt_difficulty);
     const prepEndsAt = now + ROUND_PREP_DURATION_MS;
 
     this.ctx.storage.sql.exec(
@@ -1646,6 +1665,7 @@ export class GameRoom extends DurableObject<Env> {
       roundIndex,
       totalRounds: room.total_rounds,
       roundDurationMs: room.round_duration_ms,
+      promptDifficulty: room.prompt_difficulty,
       activeTeam: room.active_team,
       artistSeatId: room.artist_seat_id,
       endsAt: room.ends_at,

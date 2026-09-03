@@ -11,6 +11,7 @@ function snapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
     roundIndex: 0,
     totalRounds: 4,
     roundDurationMs: 60_000,
+    promptDifficulty: "easy",
     activeTeam: "cobalt",
     artistSeatId: null,
     endsAt: null,

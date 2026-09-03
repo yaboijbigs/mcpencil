@@ -1,4 +1,4 @@
-import { canGuess, isArtist, type RoomSnapshot, type VectorPrimitive } from "../shared/game";
+import { DEFAULT_PROMPT_DIFFICULTY, canGuess, isArtist, type RoomSnapshot, type VectorPrimitive } from "../shared/game";
 import { buildCanvasPerception } from "./canvasPerception";
 
 export const WEBMCP_REGISTERED_TOOL_NAMES = [
@@ -143,7 +143,14 @@ export function compactWebMcpState(
     roomCode: snapshot.roomCode, mode: snapshot.mode, phase: snapshot.phase, round: snapshot.roundIndex + 1,
     totalRounds: snapshot.totalRounds, revision: snapshot.revision, yourSeatId: seatId,
     yourRole: role,
-    matchSettings: { totalRounds: snapshot.totalRounds, roundDurationMs: snapshot.roundDurationMs },
+    matchSettings: {
+      totalRounds: snapshot.totalRounds,
+      roundDurationMs: snapshot.roundDurationMs,
+      promptDifficulty: snapshot.promptDifficulty ?? DEFAULT_PROMPT_DIFFICULTY,
+    },
+    promptStyle: snapshot.promptDifficulty === "hard"
+      ? "An action phrase. Draw or guess the action, not just an object."
+      : "A single-word noun.",
     ...(scoring === "team"
       ? { yourTeam: seat?.team, activeTeam: snapshot.activeTeam, scores: snapshot.scores }
       : scoring === "individual"

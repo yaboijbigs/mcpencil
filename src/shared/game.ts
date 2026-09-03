@@ -14,6 +14,8 @@ export const FREE_FOR_ALL_MAX_PLAYERS = 8;
 export const PRACTICE_ROUND_OPTIONS = [2, 4, 6] as const;
 export const ARENA_ROUND_OPTIONS = [4, 6, 8] as const;
 export const ROUND_DURATION_OPTIONS_MS = [90_000, 120_000, 150_000] as const;
+export const PROMPT_DIFFICULTIES = ["easy", "hard"] as const;
+export const DEFAULT_PROMPT_DIFFICULTY = "easy" as const;
 
 export const TEAM_IDS = ["cobalt", "coral"] as const;
 export const CONTROLLER_TYPES = ["human", "agent"] as const;
@@ -27,6 +29,7 @@ export type ActionOrigin = (typeof ORIGINS)[number];
 export type PaletteColor = (typeof PALETTE)[number];
 export type StrokeWidth = (typeof STROKE_WIDTHS)[number];
 export type RoomMode = "practice" | "arena" | "free-for-all";
+export type PromptDifficulty = (typeof PROMPT_DIFFICULTIES)[number];
 export type MatchPhase = "lobby" | "round-prep" | "drawing" | "round-end" | "match-end";
 
 const XCoordinate = z.number().finite().min(0).max(CANVAS_WIDTH);
@@ -293,6 +296,7 @@ export interface RoomSnapshot {
   roundIndex: number;
   totalRounds: number;
   roundDurationMs: number;
+  promptDifficulty: PromptDifficulty;
   activeTeam: TeamId;
   artistSeatId: string | null;
   endsAt: number | null;
@@ -320,6 +324,7 @@ export const TeamSchema = z.enum(TEAM_IDS);
 export const ControllerSchema = z.enum(CONTROLLER_TYPES);
 export const OriginSchema = z.enum(ORIGINS);
 export const ModeSchema = z.enum(["practice", "arena", "free-for-all"]);
+export const PromptDifficultySchema = z.enum(PROMPT_DIFFICULTIES);
 
 export const CreateRoomRequestSchema = z.object({
   name: PlayerNameSchema,
@@ -352,6 +357,8 @@ const ConfigureMatchCommandSchema = z.object({
     (value) => (ROUND_DURATION_OPTIONS_MS as readonly number[]).includes(value),
     { message: "Round duration must be 90, 120, or 150 seconds." },
   ),
+  // Older clients can still change the clock without resetting the difficulty.
+  promptDifficulty: PromptDifficultySchema.optional(),
   origin: OriginSchema,
 }).strict();
 

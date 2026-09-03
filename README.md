@@ -86,7 +86,9 @@ Artist guidance prioritizes one simple silhouette/outline stroke immediately, a 
 
 The host chooses 90, 120, or 150 seconds per round in every waiting room, with 90 seconds as the default. Sketch Duet and Team Match additionally expose their allowed round counts; Free-for-All derives its round count from the frozen starting roster. Everyone sees synchronized settings, and only the host can change them.
 
-Wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers. The server-side deck contains 174 concrete single-word nouns, including a 139-card Sketch Duet pool; prompts are dealt without replacement for the entire match.
+The host also chooses **Easy** (default) or **Hard** under **House rules → Prompt difficulty** in every lobby. Easy uses single words such as bear, dog, hat, and helicopter; Hard uses actions such as flying a kite and driving a car. The question-mark tooltip explains both with examples and works on hover, keyboard focus, or tap. In Sketch Duet, choose the difficulty before your partner joins, since the match starts automatically.
+
+Wrong guesses do not lose points but are rate-limited. Matching normalizes case, punctuation, spacing, accents, curated aliases, and one-character typos for sufficiently long answers. The server-side pools contain 300 Easy single-word nouns (265 available in Sketch Duet) and 140 Hard action prompts available in all modes. Hard answers must identify the action: “kite” alone does not solve “flying a kite.” Prompts are dealt without replacement for the entire match, and changing the timer or round count preserves the selected difficulty.
 
 ## Architecture
 

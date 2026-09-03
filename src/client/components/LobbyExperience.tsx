@@ -1,11 +1,14 @@
-import type { ReactNode } from "react";
+import { useId, useState, type ReactNode } from "react";
 import {
   ARENA_ROUND_OPTIONS,
+  DEFAULT_PROMPT_DIFFICULTY,
   FREE_FOR_ALL_MAX_PLAYERS,
   FREE_FOR_ALL_MIN_PLAYERS,
   PRACTICE_ROUND_OPTIONS,
+  PROMPT_DIFFICULTIES,
   ROUND_DURATION_OPTIONS_MS,
   type ControllerType,
+  type PromptDifficulty,
   type RoomCommand,
   type RoomSnapshot,
   type Seat,
@@ -181,10 +184,11 @@ function PracticeLobby({
             snapshot={snapshot}
             self={self}
             busy={busy}
-            onConfigure={(totalRounds, roundDurationMs) => onCommand({
+            onConfigure={(totalRounds, roundDurationMs, promptDifficulty) => onCommand({
               type: "configure_match",
               totalRounds,
               roundDurationMs,
+              promptDifficulty,
               origin: "human-ui",
             })}
           />
@@ -254,10 +258,11 @@ function TeamLobby({
             snapshot={snapshot}
             self={self}
             busy={busy}
-            onConfigure={(totalRounds, roundDurationMs) => onCommand({
+            onConfigure={(totalRounds, roundDurationMs, promptDifficulty) => onCommand({
               type: "configure_match",
               totalRounds,
               roundDurationMs,
+              promptDifficulty,
               origin: "human-ui",
             })}
           />
@@ -355,10 +360,11 @@ function FreeForAllLobby({
             snapshot={snapshot}
             self={self}
             busy={busy}
-            onConfigure={(totalRounds, roundDurationMs) => onCommand({
+            onConfigure={(totalRounds, roundDurationMs, promptDifficulty) => onCommand({
               type: "configure_match",
               totalRounds,
               roundDurationMs,
+              promptDifficulty,
               origin: "human-ui",
             })}
           />
@@ -536,8 +542,11 @@ function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
   snapshot: RoomSnapshot;
   self: Seat;
   busy: boolean;
-  onConfigure(totalRounds: number, roundDurationMs: number): Promise<unknown>;
+  onConfigure(totalRounds: number, roundDurationMs: number, promptDifficulty: PromptDifficulty): Promise<unknown>;
 }) {
+  const difficulty = snapshot.promptDifficulty ?? DEFAULT_PROMPT_DIFFICULTY;
+  const difficultyLabel = difficulty === "hard" ? "Hard" : "Easy";
+  const difficultyLabelId = useId();
   const roundOptions = snapshot.mode === "practice"
     ? PRACTICE_ROUND_OPTIONS
     : ARENA_ROUND_OPTIONS;
@@ -547,7 +556,7 @@ function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
   const displayedRoundLabel = `${displayedRoundCount} ${displayedRoundCount === 1 ? "round" : "rounds"}`;
   const displayedPlayerLabel = `${livePlayerCount} ${livePlayerCount === 1 ? "player" : "players"}`;
   const humanHost = self.isHost && self.controller === "human";
-  const canEdit = humanHost && !busy;
+  const canEdit = humanHost && !busy && snapshot.phase === "lobby";
   const status = busy && humanHost
     ? "Saving room settings…"
     : !self.isHost
@@ -555,15 +564,15 @@ function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
       : self.controller === "agent"
         ? "The agent host can change settings with configure_match."
         : freeForAll
-          ? "Rounds follow the roster — you can set the drawing clock."
+          ? "Rounds follow the roster — you can set the clock and difficulty."
           : "You’re the host — changes update for everyone.";
 
   return (
     <section className={`settings-card ${canEdit ? "is-editable" : "is-locked"}`} aria-labelledby="game-settings-title">
       <header>
         <div><span className="eyebrow">Before you play</span><h3 id="game-settings-title">House rules</h3></div>
-        <span className="settings-summary" aria-label={`${displayedRoundLabel}, ${snapshot.roundDurationMs / 1000} seconds each`}>
-          {freeForAll ? displayedPlayerLabel : snapshot.totalRounds} × {snapshot.roundDurationMs / 1000}s
+        <span className="settings-summary" aria-label={`${displayedRoundLabel}, ${snapshot.roundDurationMs / 1000} seconds each, ${difficultyLabel} prompts`}>
+          {freeForAll ? displayedPlayerLabel : snapshot.totalRounds} × {snapshot.roundDurationMs / 1000}s · {difficultyLabel}
         </span>
       </header>
       {!freeForAll ? <fieldset disabled={!canEdit}>
@@ -575,7 +584,7 @@ function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
               key={rounds}
               className={snapshot.totalRounds === rounds ? "is-selected" : ""}
               aria-pressed={snapshot.totalRounds === rounds}
-              onClick={() => void onConfigure(rounds, snapshot.roundDurationMs)}
+              onClick={() => void onConfigure(rounds, snapshot.roundDurationMs, difficulty)}
             >{rounds}</button>
           ))}
         </div>
@@ -594,16 +603,66 @@ function GameSettingsCard({ snapshot, self, busy, onConfigure }: {
               key={durationMs}
               className={snapshot.roundDurationMs === durationMs ? "is-selected" : ""}
               aria-pressed={snapshot.roundDurationMs === durationMs}
-              onClick={() => void onConfigure(snapshot.totalRounds, durationMs)}
+              onClick={() => void onConfigure(snapshot.totalRounds, durationMs, difficulty)}
             >{durationMs / 1000}s</button>
           ))}
         </div>
       </fieldset>
+      <div className="difficulty-settings">
+        <div className="difficulty-heading">
+          <span id={difficultyLabelId}>Prompt difficulty</span>
+          <DifficultyTooltip />
+        </div>
+        <fieldset disabled={!canEdit} aria-labelledby={difficultyLabelId}>
+          <div className="settings-options difficulty-options">
+            {PROMPT_DIFFICULTIES.map((option) => (
+              <button
+                type="button"
+                key={option}
+                className={difficulty === option ? "is-selected" : ""}
+                aria-pressed={difficulty === option}
+                onClick={() => void onConfigure(snapshot.totalRounds, snapshot.roundDurationMs, option)}
+              >{option === "easy" ? "Easy" : "Hard"}</button>
+            ))}
+          </div>
+        </fieldset>
+      </div>
       <p className="settings-status" role="status">
         <span className={canEdit ? "settings-edit-mark" : "settings-lock-mark"} aria-hidden="true">{canEdit ? "✎" : "•"}</span>
         {status}
       </p>
     </section>
+  );
+}
+
+function DifficultyTooltip() {
+  const tooltipId = useId();
+  const [hovered, setHovered] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const [dismissed, setDismissed] = useState(false);
+  const visible = (hovered || focused) && !dismissed;
+
+  return (
+    <span
+      className="difficulty-help"
+      onMouseEnter={() => { setHovered(true); setDismissed(false); }}
+      onMouseLeave={() => setHovered(false)}
+    >
+      <button
+        type="button"
+        className="difficulty-help-button"
+        aria-label="About prompt difficulty"
+        aria-describedby={tooltipId}
+        onFocus={() => { setFocused(true); setDismissed(false); }}
+        onBlur={() => setFocused(false)}
+        onClick={() => { setFocused(true); setDismissed(false); }}
+        onKeyDown={(event) => { if (event.key === "Escape") setDismissed(true); }}
+      >?</button>
+      <span id={tooltipId} role="tooltip" className="difficulty-tooltip" hidden={!visible}>
+        <span><strong>Easy:</strong> a single word, like bear, dog, hat, or helicopter.</span>
+        <span><strong>Hard:</strong> an action, like flying a kite or driving a car. Guess the action, not just the object.</span>
+      </span>
+    </span>
   );
 }
 

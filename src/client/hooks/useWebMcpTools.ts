@@ -2,8 +2,11 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { z } from "zod";
 import {
   ARENA_ROUND_OPTIONS,
+  DEFAULT_PROMPT_DIFFICULTY,
   DrawBatchCommandSchema,
   PRACTICE_ROUND_OPTIONS,
+  PROMPT_DIFFICULTIES,
+  PromptDifficultySchema,
   PrimitiveSchema,
   ROUND_DURATION_OPTIONS_MS,
   canGuess,
@@ -127,6 +130,7 @@ const ACTIVE_GUESS_RETRY_WAIT_MS = 2_000;
 const ConfigureMatchInput = z.object({
   totalRounds: z.number().int(),
   roundDurationMs: z.number().int(),
+  promptDifficulty: PromptDifficultySchema.optional(),
 }).strict();
 
 interface ToolRegistration {
@@ -444,12 +448,13 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
   definitions.push(tool({
     name: "configure_match",
     title: "Configure MCPencil match",
-    description: "Set lobby match options only when the user asks. Sketch Duet supports 2, 4, or 6 rounds; Team Match supports 4, 6, or 8. Free-for-All automatically uses one round per player, so send the current totalRounds unchanged and configure only drawing time. Drawing time supports 90, 120, or 150 seconds. Only the agent host can call this before play begins.",
+    description: "Set lobby match options only when the user asks. Sketch Duet supports 2, 4, or 6 rounds; Team Match supports 4, 6, or 8. Free-for-All automatically uses one round per player, so send the current totalRounds unchanged and configure drawing time or prompt difficulty. Drawing time supports 90, 120, or 150 seconds. Easy prompts are single words (bear, dog, hat, helicopter); Hard prompts are actions (flying a kite, driving a car). Omit promptDifficulty to preserve the current setting. Only the agent host can call this before play begins.",
     inputSchema: {
       type: "object",
       properties: {
         totalRounds: { type: "integer", minimum: 1, maximum: 8, description: "Sketch Duet: 2/4/6. Team Match: 4/6/8. Free-for-All: copy the current automatic player-count value unchanged." },
         roundDurationMs: { type: "integer", enum: [...ROUND_DURATION_OPTIONS_MS], description: "Drawing time per round in milliseconds." },
+        promptDifficulty: { type: "string", enum: [...PROMPT_DIFFICULTIES], description: "Optional. Easy: a single word. Hard: an action phrase. Omit to preserve the current difficulty." },
       },
       required: ["totalRounds", "roundDurationMs"],
       additionalProperties: false,
@@ -476,11 +481,16 @@ export function useWebMcpTools({ snapshot, seatId, enabled = true, guessesEnable
         type: "configure_match",
         totalRounds,
         roundDurationMs: parsed.roundDurationMs,
+        ...(parsed.promptDifficulty === undefined ? {} : { promptDifficulty: parsed.promptDifficulty }),
         origin: "webmcp",
       }, signal);
       return {
         ...result,
-        matchSettings: { totalRounds, roundDurationMs: parsed.roundDurationMs },
+        matchSettings: {
+          totalRounds,
+          roundDurationMs: parsed.roundDurationMs,
+          promptDifficulty: parsed.promptDifficulty ?? activeSnapshot.promptDifficulty ?? DEFAULT_PROMPT_DIFFICULTY,
+        },
         mustContinue: true,
         nextAction: { tool: "get_match_state", arguments: {}, instruction: "Confirm the synchronized lobby settings and continue preparing the match." },
       };
@@ -894,7 +904,7 @@ function summarizeInput(name: string, input: Record<string, unknown>) {
     return `${afterRevision}${wait}`;
   }
   if (name === "configure_match") {
-    return `${String(input.totalRounds)} rounds · ${String(input.roundDurationMs)}ms drawing time`;
+    return `${String(input.totalRounds)} rounds · ${String(input.roundDurationMs)}ms drawing time${input.promptDifficulty ? ` · ${String(input.promptDifficulty)} prompts` : ""}`;
   }
   if (name === "play_mcpencil") {
     const fields = [

@@ -2,6 +2,7 @@ import { env } from "cloudflare:workers";
 import { abortAllDurableObjects, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../src/worker/index";
+import { HARD_PROMPTS, PRACTICE_PROMPTS } from "../src/worker/prompts";
 import type {
   ApiFailure,
   CommandResult,
@@ -144,8 +145,16 @@ describe("Sketch Duet HTTP journey", () => {
       phase: "lobby",
       totalRounds: 2,
       roundDurationMs: ROUND_DURATION_MS,
+      promptDifficulty: "easy",
     });
     expect(human.snapshot.seats).toHaveLength(1);
+    expect((await command(human, {
+      type: "configure_match",
+      totalRounds: 2,
+      roundDurationMs: ROUND_DURATION_MS,
+      promptDifficulty: "hard",
+      origin: "human-ui",
+    })).status).toBe(200);
     const agent = await joinRoom(human.roomCode, "Browser Agent", "cobalt", "agent");
 
     expect(agent.seatId).not.toBe(human.seatId);
@@ -170,6 +179,7 @@ describe("Sketch Duet HTTP journey", () => {
       roundIndex: 0,
       totalRounds: 2,
       artistSeatId: agent.seatId,
+      promptDifficulty: "hard",
     });
 
     const deniedHumanPrompt = await prompt(human);
@@ -180,6 +190,7 @@ describe("Sketch Duet HTTP journey", () => {
     expect(agentPromptResponse.status).toBe(200);
     const firstPrompt = await body<PrivatePrompt>(agentPromptResponse);
     expect(firstPrompt.prompt.length).toBeGreaterThan(2);
+    expect(HARD_PROMPTS.some((card) => card.prompt === firstPrompt.prompt)).toBe(true);
     assertPromptAbsent(await state(human), firstPrompt.prompt);
 
     const replayBeforeReveal = await request(`/api/rooms/${human.roomCode}/replay`, {
@@ -295,6 +306,7 @@ describe("Sketch Duet HTTP journey", () => {
     expect(humanPromptResponse.status).toBe(200);
     const secondPrompt = await body<PrivatePrompt>(humanPromptResponse);
     expect(secondPrompt.prompt).not.toBe(firstPrompt.prompt);
+    expect(HARD_PROMPTS.some((card) => card.prompt === secondPrompt.prompt)).toBe(true);
     expect(JSON.stringify(await state(agent)).toLocaleLowerCase("en-US"))
       .not.toContain(secondPrompt.prompt.toLocaleLowerCase("en-US"));
 
@@ -392,22 +404,26 @@ describe("Durable room authority", () => {
       type: "configure_match",
       totalRounds: 6,
       roundDurationMs: 120_000,
+      promptDifficulty: "hard",
       origin: "webmcp",
     })).status).toBe(200);
     expect(await state(agentHost)).toMatchObject({
       totalRounds: 6,
       roundDurationMs: 120_000,
+      promptDifficulty: "hard",
     });
 
     const practice = await createRoom("practice", "Practice Settings Host");
     expect(practice.snapshot).toMatchObject({
       totalRounds: 2,
       roundDurationMs: 90_000,
+      promptDifficulty: "easy",
     });
     const freeForAll = await createRoom("free-for-all", "FFA Settings Host");
     expect(freeForAll.snapshot).toMatchObject({
       totalRounds: 1,
       roundDurationMs: 90_000,
+      promptDifficulty: "easy",
     });
     expect((await command(freeForAll, {
       type: "configure_match",
@@ -426,6 +442,7 @@ describe("Durable room authority", () => {
     expect(host.snapshot).toMatchObject({
       totalRounds: 6,
       roundDurationMs: 90_000,
+      promptDifficulty: "easy",
     });
 
     expect((await command(host, {
@@ -443,6 +460,7 @@ describe("Durable room authority", () => {
       type: "configure_match",
       totalRounds: 8,
       roundDurationMs: 150_000,
+      promptDifficulty: "hard",
       origin: "human-ui",
     });
     expect(nonHost.status).toBe(403);
@@ -456,6 +474,25 @@ describe("Durable room authority", () => {
     });
     expect(invalidRounds.status).toBe(400);
     expect(await body<ApiFailure>(invalidRounds)).toMatchObject({ code: "INVALID_MATCH_SETTINGS" });
+
+    for (const promptDifficulty of ["medium", "HARD", "", null, 1]) {
+      const invalidDifficulty = await request(`/api/rooms/${host.roomCode}/commands`, {
+        method: "POST",
+        body: JSON.stringify({
+          token: host.token,
+          command: {
+            type: "configure_match",
+            totalRounds: 8,
+            roundDurationMs: 150_000,
+            promptDifficulty,
+            origin: "human-ui",
+          },
+        }),
+      });
+      expect(invalidDifficulty.status).toBe(400);
+      expect(await body<ApiFailure>(invalidDifficulty)).toMatchObject({ code: "INVALID_COMMAND" });
+    }
+    expect((await state(host)).promptDifficulty).toBe("easy");
 
     for (const roundDurationMs of [30_000, 45_000, 60_000]) {
       const invalidDuration = await request(`/api/rooms/${host.roomCode}/commands`, {
@@ -478,6 +515,7 @@ describe("Durable room authority", () => {
       type: "configure_match",
       totalRounds: 8,
       roundDurationMs: 150_000,
+      promptDifficulty: "hard",
       origin: "webmcp",
     });
     expect(wrongOrigin.status).toBe(403);
@@ -488,6 +526,7 @@ describe("Durable room authority", () => {
       type: "configure_match",
       totalRounds: 8,
       roundDurationMs: 150_000,
+      promptDifficulty: "hard",
       origin: "human-ui",
     });
     expect(configured.status).toBe(200);
@@ -500,6 +539,7 @@ describe("Durable room authority", () => {
     expect(snapshot).toMatchObject({
       totalRounds: 8,
       roundDurationMs: 150_000,
+      promptDifficulty: "hard",
     });
     expect(snapshot.seats.find((seat) => seat.id === host.seatId)?.isReady).toBe(false);
     expect(snapshot.seats.find((seat) => seat.id === teammate.seatId)?.isReady).toBe(false);
@@ -509,10 +549,20 @@ describe("Durable room authority", () => {
       origin: "human-ui",
     });
 
+    // Existing clients send only the original two settings. They must not reset difficulty.
+    expect((await command(host, {
+      type: "configure_match",
+      totalRounds: 8,
+      roundDurationMs: 150_000,
+      origin: "human-ui",
+    })).status).toBe(200);
+    expect((await state(host)).promptDifficulty).toBe("hard");
+
     await abortAllDurableObjects();
     expect(await state(host)).toMatchObject({
       totalRounds: 8,
       roundDurationMs: 150_000,
+      promptDifficulty: "hard",
     });
   });
 
@@ -586,18 +636,20 @@ describe("Durable room authority", () => {
       type: "configure_match",
       totalRounds: 6,
       roundDurationMs: 90_000,
+      promptDifficulty: "hard",
       origin: "human-ui",
     });
     expect(wrongPhase.status).toBe(409);
     expect(await body<ApiFailure>(wrongPhase)).toMatchObject({ code: "WRONG_PHASE" });
   });
 
-  it("migrates an existing v1 room to the persisted v2 duration column", async () => {
+  it("migrates an existing v1 room to persisted duration and difficulty columns", async () => {
     const host = await createRoom("arena", "Migration Host");
     const stub = env.ROOMS.getByName(host.roomCode);
     await runInDurableObject(stub, async (_instance, durableState) => {
       durableState.storage.sql.exec("ALTER TABLE room DROP COLUMN round_duration_ms");
-      durableState.storage.sql.exec("DELETE FROM schema_migrations WHERE version = 2");
+      durableState.storage.sql.exec("ALTER TABLE room DROP COLUMN prompt_difficulty");
+      durableState.storage.sql.exec("DELETE FROM schema_migrations WHERE version >= 2");
       const versions = durableState.storage.sql
         .exec<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")
         .toArray()
@@ -609,6 +661,7 @@ describe("Durable room authority", () => {
     expect(await state(host)).toMatchObject({
       totalRounds: 6,
       roundDurationMs: 90_000,
+      promptDifficulty: "easy",
     });
     const recoveredStub = env.ROOMS.getByName(host.roomCode);
     await runInDurableObject(recoveredStub, async (_instance, durableState) => {
@@ -617,12 +670,71 @@ describe("Durable room authority", () => {
         .toArray()
         .map((row) => row.name);
       expect(columns).toContain("round_duration_ms");
+      expect(columns).toContain("prompt_difficulty");
       const versions = durableState.storage.sql
         .exec<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")
         .toArray()
         .map((row) => row.version);
-      expect(versions).toEqual([1, 2]);
+      expect(versions).toEqual([1, 2, 3]);
     });
+  });
+
+  it("migrates v2 rooms to easy idempotently without replacing stored private prompts", async () => {
+    const human = await createRoom("practice", "Migration Host");
+    expect((await command(human, {
+      type: "configure_match",
+      totalRounds: 4,
+      roundDurationMs: 120_000,
+      origin: "human-ui",
+    })).status).toBe(200);
+    const agent = await joinRoom(human.roomCode, "Migration Agent", "cobalt", "agent");
+    await connectPractice(human, agent);
+    const stub = env.ROOMS.getByName(human.roomCode);
+    const legacyPrompt = "a rabbit painting eggs";
+    await runInDurableObject(stub, async (_instance, durableState) => {
+      // A persisted round may come from a retired deck; migration must not regenerate it.
+      durableState.storage.sql.exec(
+        "UPDATE rounds SET prompt = ?, category = ?, aliases_json = ? WHERE round_index = 0",
+        legacyPrompt,
+        "legacy action",
+        JSON.stringify(["rabbit painting eggs"]),
+      );
+      durableState.storage.sql.exec("ALTER TABLE room DROP COLUMN prompt_difficulty");
+      durableState.storage.sql.exec("DELETE FROM schema_migrations WHERE version = 3");
+    });
+
+    for (let restart = 0; restart < 2; restart += 1) {
+      await abortAllDurableObjects();
+      const recovered = await state(human);
+      expect(recovered).toMatchObject({
+        roundIndex: 0,
+        totalRounds: 4,
+        roundDurationMs: 120_000,
+        promptDifficulty: "easy",
+        artistSeatId: agent.seatId,
+      });
+      assertPromptAbsent(recovered, legacyPrompt);
+      expect((await prompt(human)).status).toBe(403);
+      expect(await body<PrivatePrompt>(await prompt(agent))).toMatchObject({
+        prompt: legacyPrompt,
+        category: "legacy action",
+        roundIndex: 0,
+      });
+      await runInDurableObject(env.ROOMS.getByName(human.roomCode), async (_instance, durableState) => {
+        const column = durableState.storage.sql
+          .exec<{ name: string; notnull: number; dflt_value: string | null }>("PRAGMA table_info(room)")
+          .toArray()
+          .find((entry) => entry.name === "prompt_difficulty");
+        expect(column).toMatchObject({ notnull: 1, dflt_value: "'easy'" });
+        expect(durableState.storage.sql
+          .exec<{ version: number }>("SELECT version FROM schema_migrations ORDER BY version")
+          .toArray()
+          .map((row) => row.version)).toEqual([1, 2, 3]);
+        expect(durableState.storage.sql
+          .exec<{ aliases_json: string }>("SELECT aliases_json FROM rounds WHERE round_index = 0")
+          .one().aliases_json).toBe(JSON.stringify(["rabbit painting eggs"]));
+      });
+    }
   });
 
   it("persists hashed identity and room state across isolate teardown", async () => {
@@ -630,6 +742,9 @@ describe("Durable room authority", () => {
     const agent = await joinRoom(human.roomCode, "Eviction Agent", "cobalt", "agent");
     await connectPractice(human, agent);
     const before = await state(human);
+    const easyPrompt = await body<PrivatePrompt>(await prompt(agent));
+    expect(before.promptDifficulty).toBe("easy");
+    expect(PRACTICE_PROMPTS.some((card) => card.prompt === easyPrompt.prompt)).toBe(true);
 
     const stub = env.ROOMS.getByName(human.roomCode);
     await runInDurableObject(stub, async (_instance, durableState) => {
@@ -871,6 +986,13 @@ describe("Durable room authority", () => {
 
   it("runs a Free-for-All with one artist turn per player and individual scoring", async () => {
     const host = await createRoom("free-for-all", "Free Host");
+    expect((await command(host, {
+      type: "configure_match",
+      totalRounds: 1,
+      roundDurationMs: 90_000,
+      promptDifficulty: "hard",
+      origin: "human-ui",
+    })).status).toBe(200);
     const second = await joinRoom(host.roomCode, "Second Sketcher");
     const firstSockets = await Promise.all([host, second].map(connectSeat));
     for (const player of [host, second]) {
@@ -907,6 +1029,7 @@ describe("Durable room authority", () => {
         phase: "round-prep",
         roundIndex,
         totalRounds: players.length,
+        promptDifficulty: "hard",
       });
       const artistSeatId = prepared.artistSeatId;
       expect(artistSeatId).not.toBeNull();
@@ -915,6 +1038,7 @@ describe("Durable room authority", () => {
       const artist = credentialsBySeat.get(artistSeatId!);
       expect(artist).toBeDefined();
       const card = await body<PrivatePrompt>(await prompt(artist!));
+      expect(HARD_PROMPTS.some((candidate) => candidate.prompt === card.prompt)).toBe(true);
       expect(prompts.has(card.prompt)).toBe(false);
       prompts.add(card.prompt);
 
@@ -990,8 +1114,15 @@ describe("Durable room authority", () => {
     void thirdSocket;
   }, 180_000);
 
-  it("uses six different prompts across a complete arena match", async () => {
+  it("uses six different hard prompts across a complete arena match", async () => {
     const host = await createRoom("arena", "Deck Host");
+    expect((await command(host, {
+      type: "configure_match",
+      totalRounds: 6,
+      roundDurationMs: 90_000,
+      promptDifficulty: "hard",
+      origin: "human-ui",
+    })).status).toBe(200);
     const coralOne = await joinRoom(host.roomCode, "Deck Coral One");
     const cobaltMate = await joinRoom(host.roomCode, "Deck Cobalt Mate");
     const coralTwo = await joinRoom(host.roomCode, "Deck Coral Two");
@@ -1011,10 +1142,11 @@ describe("Durable room authority", () => {
     const stub = env.ROOMS.getByName(host.roomCode);
     for (let roundIndex = 0; roundIndex < 6; roundIndex += 1) {
       const prepared = await state(host);
-      expect(prepared).toMatchObject({ phase: "round-prep", roundIndex });
+      expect(prepared).toMatchObject({ phase: "round-prep", roundIndex, promptDifficulty: "hard" });
       const artist = credentialsBySeat.get(prepared.artistSeatId!);
       expect(artist).toBeDefined();
       const card = await body<PrivatePrompt>(await prompt(artist!));
+      expect(HARD_PROMPTS.some((candidate) => candidate.prompt === card.prompt)).toBe(true);
       expect(seen.has(card.prompt)).toBe(false);
       seen.add(card.prompt);
 

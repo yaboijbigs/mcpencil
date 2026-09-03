@@ -11,6 +11,7 @@ function artistSnapshot(mode: RoomMode): RoomSnapshot {
     roundIndex: 2,
     totalRounds: mode === "practice" ? 4 : 6,
     roundDurationMs: 90_000,
+    promptDifficulty: "easy",
     activeTeam: "cobalt",
     artistSeatId: "human-seat",
     endsAt: null,

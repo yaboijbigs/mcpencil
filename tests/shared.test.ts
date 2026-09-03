@@ -3,9 +3,11 @@ import {
   CANVAS_HEIGHT,
   CANVAS_WIDTH,
   CommandEnvelopeSchema,
+  DEFAULT_PROMPT_DIFFICULTY,
   DrawBatchCommandSchema,
   MAX_BATCH_PRIMITIVES,
   PrimitiveSchema,
+  PROMPT_DIFFICULTIES,
   ROUND_DURATION_MS,
   ROUND_DURATION_OPTIONS_MS,
   RoomCodeSchema,
@@ -52,6 +54,7 @@ function snapshot(overrides: Partial<RoomSnapshot> = {}): RoomSnapshot {
     roundIndex: 0,
     totalRounds: 6,
     roundDurationMs: 90_000,
+    promptDifficulty: "easy",
     activeTeam: "cobalt",
     artistSeatId: "artist",
     endsAt: 100_000,
@@ -259,6 +262,33 @@ describe("match duration settings", () => {
   );
 });
 
+describe("prompt difficulty settings", () => {
+  const baseConfiguration = {
+    type: "configure_match",
+    totalRounds: 4,
+    roundDurationMs: 90_000,
+    origin: "webmcp",
+  };
+
+  it("offers easy and hard with an easy default", () => {
+    expect(PROMPT_DIFFICULTIES).toEqual(["easy", "hard"]);
+    expect(DEFAULT_PROMPT_DIFFICULTY).toBe("easy");
+  });
+
+  it.each(["easy", "hard"])("accepts explicit %s prompts", (promptDifficulty) => {
+    expect(RoomCommandSchema.parse({ ...baseConfiguration, promptDifficulty }))
+      .toMatchObject({ promptDifficulty });
+  });
+
+  it("preserves omitted difficulty for existing clients", () => {
+    expect(RoomCommandSchema.parse(baseConfiguration)).not.toHaveProperty("promptDifficulty");
+  });
+
+  it.each(["medium", "HARD", "", null, 1])("rejects invalid difficulty %s", (promptDifficulty) => {
+    expect(RoomCommandSchema.safeParse({ ...baseConfiguration, promptDifficulty }).success).toBe(false);
+  });
+});
+
 describe("role-safe shared helpers", () => {
   it("recognizes only the current artist during drawing", () => {
     expect(isArtist(snapshot(), "artist")).toBe(true);
@@ -431,6 +461,7 @@ describe("dynamic WebMCP availability", () => {
       phase: "lobby",
       totalRounds: 4,
       roundDurationMs: 120_000,
+      promptDifficulty: "hard",
       artistSeatId: null,
       seats: [{
         id: "artist",
@@ -449,7 +480,8 @@ describe("dynamic WebMCP availability", () => {
     ]);
     expect(compactWebMcpState(agentPracticeHost, "artist")).toMatchObject({
       competitive: false,
-      matchSettings: { totalRounds: 4, roundDurationMs: 120_000 },
+      matchSettings: { totalRounds: 4, roundDurationMs: 120_000, promptDifficulty: "hard" },
+      promptStyle: "An action phrase. Draw or guess the action, not just an object.",
     });
   });
 
@@ -850,6 +882,29 @@ describe("dynamic WebMCP availability", () => {
     expect(state.nextAction.instruction).toContain("recognizable outline in the first few strokes; add details later");
     expect(state.nextAction.instruction).toContain("After each successful acknowledgement, follow the returned nextAction immediately");
     expect(state.nextAction.instruction).toContain("no screenshots, get_match_state, narration, or full-drawing planning between drawing strokes");
+  });
+
+  it.each([
+    { promptDifficulty: "easy", promptStyle: "A single-word noun." },
+    { promptDifficulty: "hard", promptStyle: "An action phrase. Draw or guess the action, not just an object." },
+  ] as const)("guides artists and guessers for $promptDifficulty prompts without exposing answers", ({ promptDifficulty, promptStyle }) => {
+    const current = snapshot({
+      promptDifficulty,
+      seats: snapshot().seats.map((seat) => seat.id === "guesser"
+        ? { ...seat, controller: "agent" as const }
+        : seat),
+    });
+    for (const [seatId, tool] of [["artist", "draw_stroke"], ["guesser", "submit_guesses"]] as const) {
+      const state = compactWebMcpState(current, seatId);
+      expect(state).toMatchObject({
+        matchSettings: { promptDifficulty },
+        promptStyle,
+        nextAction: { tool },
+      });
+      expect(state).not.toHaveProperty("privatePrompt");
+      expect(state).not.toHaveProperty("prompt");
+      expect(state).not.toHaveProperty("aliases");
+    }
   });
 
   it("gives only active agent guessers bounded current-round geometry and recent guesses", () => {

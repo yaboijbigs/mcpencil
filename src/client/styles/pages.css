@@ -1870,6 +1870,78 @@
   opacity: 0.65;
 }
 
+.difficulty-settings {
+  display: grid;
+  gap: 6px;
+}
+
+.difficulty-heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--pencil);
+  font-family: var(--font-display);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.difficulty-help {
+  position: relative;
+  display: inline-flex;
+}
+
+.difficulty-help-button {
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1.5px solid var(--pencil);
+  border-radius: 50%;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.difficulty-help-button:focus-visible {
+  outline: 3px solid var(--cobalt);
+  outline-offset: 3px;
+}
+
+.difficulty-tooltip {
+  position: absolute;
+  z-index: 10;
+  bottom: 100%;
+  left: -130px;
+  width: min(260px, calc(100vw - 64px));
+  padding: 12px 14px;
+  border: 2px solid var(--ink);
+  border-radius: 10px;
+  background: var(--paper);
+  color: var(--ink);
+  box-shadow: var(--sticker-shadow-sm);
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.5;
+  letter-spacing: normal;
+  text-transform: none;
+}
+
+.difficulty-tooltip span {
+  display: block;
+}
+
+.difficulty-tooltip span + span {
+  margin-top: 6px;
+}
+
+.difficulty-options button {
+  min-width: 80px;
+}
+
 .settings-status {
   display: flex;
   align-items: baseline;
